@@ -1368,6 +1368,10 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
 
     # Anti-duplicados
     anti_dup = AntiDuplicados(sheet)
+    # Sets de deduplicacion INTRA-EJECUCION (persisten durante toda la ejecucion)
+    _exec_claves: set = set()
+    _exec_prov_num: set = set()
+    _exec_hashes: set = set()
 
     # Proveedores y exclusiones
     proveedores = cargar_proveedores(skill_dir)
@@ -1456,7 +1460,9 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
                                                    or datetime.now().strftime("%Y-%m-%d"))
                                     total_c = datos_c.get("total") or 0
                                     prov_code_c = re.sub(r"[^A-Z0-9]","", prov["nombre"].upper())[:8]
-                                    datos_c["num_factura"] = f"{prov_code_c}_{fecha_iso_c}_{total_c:.2f}_{msg_id[:8]}"
+                                    import hashlib as _hl2
+                                    _stable_c = _hl2.md5(f"{prov_code_c}_{fecha_iso_c}_{total_c:.2f}".encode()).hexdigest()[:8]
+                                    datos_c["num_factura"] = f"{prov_code_c}_{fecha_iso_c}_{total_c:.2f}_{_stable_c}"
                                     datos_c["notas"] = ((datos_c.get("notas") or "") +
                                         " | Ref.tecnica autogenerada (proveedor digital sin num fiscal)").strip(" |")
                                 else:
@@ -1473,33 +1479,35 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
                                 "proveedor": prov["nombre"],
                                 "datos": datos_c, "dry_run": dry_run,
                             })
-                            if not dry_run:
-                                c_u = clave_unica(prov["nombre"],
-                                    datos_c.get("num_factura",""),
-                                    datos_c.get("fecha",""),
-                                    datos_c.get("total") or 0.0)
-                                dup_c = anti_dup.es_duplicado(
-                                    "", c_u, msg_id, "BODY", "",
+                            # Dedup cuerpo: calcular clave SIEMPRE (tambien dry-run)
+                            c_u = clave_unica(prov["nombre"],
+                                datos_c.get("num_factura",""),
+                                datos_c.get("fecha",""),
+                                datos_c.get("total") or 0.0)
+                            dup_c = anti_dup.es_duplicado(
+                                "", c_u, msg_id, "BODY", "",
+                                prov=prov["nombre"],
+                                num=datos_c.get("num_factura",""),
+                                fecha=datos_c.get("fecha",""),
+                                total=str(datos_c.get("total") or ""))
+                            if dup_c:
+                                log(f"  -> Dup cuerpo: {dup_c}")
+                                r["duplicados"].append({"nombre": f"BODY:{msg_id[:8]}", "motivo": dup_c})
+                            else:
+                                # Registrar en anti_dup SIEMPRE (tambien dry-run)
+                                anti_dup.registrar("", c_u, msg_id, "BODY", "",
                                     prov=prov["nombre"],
                                     num=datos_c.get("num_factura",""),
                                     fecha=datos_c.get("fecha",""),
                                     total=str(datos_c.get("total") or ""))
-                                if dup_c:
-                                    log(f"  -> Dup cuerpo: {dup_c}")
-                                    r["duplicados"].append({"nombre": f"BODY:{msg_id[:8]}", "motivo": dup_c})
-                                else:
+                                if not dry_run:
                                     estado_c = "Registrada" if datos_c.get("total") else "Revisar"
                                     datos_c["notas"] = (datos_c.get("notas") or "Factura en cuerpo email, sin PDF adjunto")
                                     de = {"proveedor_nombre": prov["nombre"], "remitente": remitente, "fecha_email": meta["fecha_raw"]}
                                     ex = {"url_drive": "Factura en cuerpo email", "nombre_pdf": f"EMAIL:{msg_id[:8]}", "estado": estado_c, "msg_id": msg_id, "att_id": "BODY", "hash_pdf": "", "clave_unica": c_u}
                                     escribir_fila(sheet, de, datos_c, ex)
-                                    anti_dup.registrar("", c_u, msg_id, "BODY", "",
-                                        prov=prov["nombre"],
-                                        num=datos_c.get("num_factura",""),
-                                        fecha=datos_c.get("fecha",""),
-                                        total=str(datos_c.get("total") or ""))
-                                    etiquetar_mensaje(gmail, msg_id, label_procesadas_id)
-                                    log(f"  Registrada factura cuerpo: {estado_c}")
+                                else:
+                                    log(f"  [DRY-RUN] Habria insertado cuerpo: {prov['nombre']} | {datos_c.get('num_factura','?')} | {datos_c.get('total','?')}EUR")
                         else:
                             log(f"  Cuerpo con datos pero tipo [{tipo_c}]: {motivo_c}")
                             r["no_fiscales"].append({"nombre": f"EMAIL:{msg_id[:8]}", "proveedor": prov["nombre"], "tipo": tipo_c, "motivo": motivo_c})
@@ -1670,7 +1678,9 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
                                          or datetime.now().strftime("%Y-%m-%d"))
                             total_str = f"{datos_pdf['total']:.2f}"
                             prov_code = re.sub(r"[^A-Z0-9]", "", prov["nombre"].upper())[:8]
-                            datos_pdf["num_factura"] = f"{prov_code}_{fecha_iso}_{total_str}_{msg_id[:8]}"
+                            import hashlib as _hl
+                            _ref_id = _hl.md5(f"{prov_code}_{fecha_iso}_{total_str}".encode()).hexdigest()[:8]
+                            datos_pdf["num_factura"] = f"{prov_code}_{fecha_iso}_{total_str}_{_ref_id}"
                             datos_pdf["notas"] = ((datos_pdf.get("notas") or "") +
                                 " | Ref.tecnica autogenerada (proveedor digital sin num fiscal)").strip(" |")
                             datos_pdf["_pendiente_extraccion"] = False
@@ -1691,12 +1701,49 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
                             continue  # NO insertar en Sheet
                     datos_pdf.pop("_pendiente_extraccion", None)
 
+                    # Recomputar c_unica AHORA con num_factura final
+                    # (puede haber cambiado si se genero ref_tecnica arriba)
+                    c_unica = clave_unica(
+                        prov["nombre"],
+                        datos_pdf.get("num_factura", ""),
+                        datos_pdf.get("fecha", ""),
+                        datos_pdf.get("total") or 0.0
+                    )
+
+                    # CHECK INTRA-EJECUCION: detectar dups dentro de la misma pasada
+                    _pn_key = f"{normalizar_texto(prov['nombre'])}::{normalizar_texto(datos_pdf.get('num_factura',''))}"
+                    _dup_intra = None
+                    if c_unica and c_unica in _exec_claves:
+                        _dup_intra = f"duplicado intra-ejecucion (clave)"
+                    elif pdf_hash and pdf_hash in _exec_hashes:
+                        _dup_intra = f"duplicado intra-ejecucion (hash)"
+                    elif normalizar_texto(datos_pdf.get("num_factura","")) and _pn_key in _exec_prov_num:
+                        _dup_intra = f"duplicado intra-ejecucion (prov+num)"
+                    if _dup_intra:
+                        log(f"  -> {_dup_intra}: {prov['nombre']} | {datos_pdf.get('num_factura','?')} | {datos_pdf.get('total','?')}EUR")
+                        r["duplicados"].append({"nombre": nombre_pdf, "motivo": _dup_intra})
+                        continue
+                    # Registrar en sets intra-ejecucion ANTES de subir/insertar
+                    if c_unica: _exec_claves.add(c_unica)
+                    if pdf_hash: _exec_hashes.add(pdf_hash)
+                    if normalizar_texto(datos_pdf.get("num_factura","")): _exec_prov_num.add(_pn_key)
+
                     # Determinar estado
                     estado = determinar_estado(datos_pdf, es_desconocido)
                     if es_desconocido:
+                        # Proveedor desconocido (ej: gmail.com, outlook.com)
+                        # NO insertar en Sheet como factura automatica
                         datos_pdf["notas"] = (datos_pdf.get("notas", "") +
-                                              " | Proveedor no reconocido").strip(" |")
-                        etiquetar_mensaje(gmail, msg_id, label_pendiente_id)
+                                              " | proveedor_real_no_identificado").strip(" |")
+                        log(f"  [DESCONOCIDO] {prov['nombre']} -> PENDIENTE (no insertar en Sheet)")
+                        r["pendientes"].append({
+                            "nombre": nombre_pdf,
+                            "proveedor": prov["nombre"],
+                            "motivo": f"proveedor_no_identificado: {remitente}",
+                        })
+                        if not dry_run:
+                            etiquetar_mensaje(gmail, msg_id, label_pendiente_id)
+                        continue  # NO insertar fila fiscal
                     # Añadir tipo_documento a notas para trazabilidad
                     datos_pdf["notas"] = (
                         (datos_pdf.get("notas") or "") +

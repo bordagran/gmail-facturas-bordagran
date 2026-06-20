@@ -118,7 +118,53 @@ def filtrar_por_fecha(filas, desde, hasta):
     return resultado
 
 
-def generar_resumen(filas, periodo):
+def _detectar_columnas(headers):
+    """Mapea nombres de columna del Sheet real a índices 0-based.
+    Usa alias para robustez ante variaciones de nombre.
+    Devuelve dict {clave: indice} con fallback a índices COL dict si no se encuentra."""
+    ALIAS = {
+        "proveedor":    ["proveedor", "provider", "nombre proveedor"],
+        "num_factura":  ["num_factura", "numero factura", "num. factura", "factura"],
+        "base":         ["base imponible", "base", "base eur", "base_eur"],
+        "iva_pct":      ["iva%", "iva pct", "iva porcentaje", "iva_pct", "iva %"],
+        "iva_eur":      ["iva eur", "iva_eur", "iva euros", "iva", "iva €",
+                         "cuota iva", "importe iva", "vat", "vat amount"],
+        "total":        ["importe total", "total", "total eur", "total_eur"],
+        "estado":       ["estado", "status"],
+        "notas":        ["notas", "notes", "observaciones"],
+    }
+    # Fallback 0-based del COL dict original (por si no hay headers reconocibles)
+    FALLBACK = {
+        "proveedor": 2, "num_factura": 4, "base": 6,
+        "iva_pct": 7, "iva_eur": 8, "total": 9, "estado": 11, "notas": 12,
+    }
+    h_lower = [h.strip().lower() for h in headers]
+    result = {}
+    for clave, aliases in ALIAS.items():
+        found = None
+        for alias in aliases:
+            if alias in h_lower:
+                found = h_lower.index(alias)
+                break
+        result[clave] = found if found is not None else FALLBACK.get(clave, -1)
+    return result
+
+
+def _get_col(fila, idx, default=""):
+    """Acceso seguro a fila por índice."""
+    if idx < 0 or idx >= len(fila):
+        return default
+    return fila[idx]
+
+
+def generar_resumen(filas, periodo, headers=None):
+    """
+    headers: lista de strings con la fila 1 del Sheet (nombres de columna).
+    Si se pasa, los índices se detectan dinámicamente.
+    Si no, se usan fallbacks hardcodeados del COL dict.
+    """
+    cols = _detectar_columnas(headers or [])
+
     resumen = {
         "periodo": periodo,
         "total_facturas": len(filas),
@@ -129,15 +175,26 @@ def generar_resumen(filas, periodo):
         "por_estado": {e: 0 for e in ESTADOS_VALIDOS},
         "facturas_revisar": [],
         "facturas_error": [],
+        "_cols_usadas": cols,  # para debug
     }
     for fila in filas:
-        proveedor = (fila[2] if len(fila) > 2 else "") or "Desconocido"
-        num_factura = fila[4] if len(fila) > 4 else ""
-        base = parse_importe(fila[6]) if len(fila) > 6 else 0.0
-        iva = parse_importe(fila[8]) if len(fila) > 8 else 0.0
-        total = parse_importe(fila[9]) if len(fila) > 9 else 0.0
-        estado = (fila[11] if len(fila) > 11 else "") or ""
-        notas = (fila[12] if len(fila) > 12 else "") or ""
+        proveedor = _get_col(fila, cols["proveedor"]) or "Desconocido"
+        num_factura = _get_col(fila, cols["num_factura"])
+        base = parse_importe(_get_col(fila, cols["base"]))
+        iva_pct_raw = _get_col(fila, cols["iva_pct"])
+        iva = parse_importe(_get_col(fila, cols["iva_eur"]))
+        total = parse_importe(_get_col(fila, cols["total"]))
+        estado = _get_col(fila, cols["estado"])
+        notas = _get_col(fila, cols["notas"])
+
+        # Guardia: si base > total en esta fila es señal de columna mal leída
+        # (p.ej. leyendo IVA% como base imponible)
+        if base > total > 0:
+            base = 0.0
+        # Derivacion: base vacia + IVA presente -> base = total - iva
+        # No aplica si iva == 0 (Canva/Anthropic sin IVA no generan base derivada)
+        if base == 0.0 and iva > 0.0 and total > iva:
+            base = round(total - iva, 2)
 
         # Solo sumar importes de documentos fiscales confirmados (L-012)
         if estado in ESTADOS_SUMAR:
@@ -323,20 +380,24 @@ def main():
         hasta = ahora
         periodo_label = "diario"
 
-    filas = sheet.get_all_values()[1:]  # saltar header
+    todas = sheet.get_all_values()
+    headers = todas[0] if todas else []
+    filas = todas[1:]  # saltar header
     filas_periodo = filtrar_por_fecha(filas, desde, hasta)
     ultimo = leer_ultimo_resultado(skill_dir)
 
-    resumen = generar_resumen(filas_periodo, periodo_label)
+    resumen = generar_resumen(filas_periodo, periodo_label, headers=headers)
+
+    # Validacion de coherencia fiscal
+    if resumen["importe_total"] > 0 and resumen["base_total"] > resumen["importe_total"]:
+        print("WARN: base_total ({:.2f}) > importe_total ({:.2f}) -- columna mal mapeada".format(
+            resumen["base_total"], resumen["importe_total"]))
+        print("      Columnas detectadas: BASE={} IVA_EUR={} TOTAL={}".format(
+            resumen["_cols_usadas"].get("base"), resumen["_cols_usadas"].get("iva_eur"),
+            resumen["_cols_usadas"].get("total")))
+
     texto = formatear_resumen_texto(resumen, ultimo, desde=desde, hasta=hasta)
     print(texto)
-
-    resultado_path = skill_dir / "runtime" / "resumen_{}.json".format(periodo_label)
-    resultado_path.parent.mkdir(exist_ok=True)
-    with open(resultado_path, "w", encoding="utf-8") as f:
-        json.dump(resumen, f, ensure_ascii=False, indent=2)
-
-    return resumen
 
 
 if __name__ == "__main__":
