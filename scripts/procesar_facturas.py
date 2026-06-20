@@ -307,6 +307,17 @@ TIPOS_FISCALES = {"factura", "factura_simplificada", "factura_en_cuerpo", "factu
 # Proveedores que pueden insertar con referencia tecnica autogenerada (sin num fiscal real)
 PROVEEDORES_REF_TECNICA = {"canva", "anthropic"}
 
+# IVA por defecto para proveedores ES sin IVA explicito en PDF
+# Solo aplica cuando tipo_doc es fiscal confirmado y base/iva_pct son None
+PROVEEDORES_IVA_DEFAULT = {
+    "sols": 21,
+    "velilla group": 21,
+    "velilla": 21,
+    "vivadtf": 21,
+    "dipgra": 21,
+    "niba": 21,
+}
+
 # Estado especial: datos insuficientes para insertar en Sheet
 ESTADO_PENDIENTE_EXTRACCION = "PENDIENTE_EXTRACCION_SIN_REGISTRAR"
 
@@ -937,7 +948,7 @@ def verificar_headers(sheet):
     COLS_FISCALES = [
         ("BASE",    ["base", "base imponible", "base eur"]),
         ("IVA_PCT", ["iva%", "iva pct", "iva porcentaje", "iva_pct", "iva %"]),
-        ("IVA_EUR", ["iva eur", "iva_eur", "iva euros"]),
+        ("IVA_EUR", ["iva eur", "iva_eur", "iva euros", "iva", "iva €", "cuota iva", "importe iva", "vat", "vat amount"]),
         ("TOTAL",   ["total", "total eur", "importe total"]),
     ]
     # Columnas protegidas O-R (indices 14-17)
@@ -1553,7 +1564,29 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
                     log(f"  Tipo fiscal: {tipo_doc}")
                     # -----------------------------------------------
 
-                    # Clave única
+                                        # Derivacion fiscal por proveedor (post-clasificacion)
+                    # Solo cuando tipo es fiscal confirmado y faltan base/IVA
+                    if datos_pdf.get("total") and datos_pdf.get("base") is None and datos_pdf.get("iva_pct") is None:
+                        prov_key = prov["nombre"].lower().strip()
+                        iva_default = None
+                        for kp, pct in PROVEEDORES_IVA_DEFAULT.items():
+                            if kp in prov_key:
+                                iva_default = pct
+                                break
+                        if iva_default is not None:
+                            total_v = datos_pdf["total"]
+                            base_v = round(total_v / (1 + iva_default / 100), 2)
+                            iva_v = round(total_v - base_v, 2)
+                            datos_pdf["base"] = base_v
+                            datos_pdf["iva_pct"] = iva_default
+                            datos_pdf["iva_eur"] = iva_v
+                            datos_pdf["notas"] = (
+                                (datos_pdf.get("notas") or "") +
+                                f" | IVA {iva_default}% por defecto proveedor"
+                            ).strip(" |")
+                            log(f"  [FISCAL] {prov['nombre']}: base={base_v} IVA{iva_default}%={iva_v} total={total_v}")
+
+# Clave única
                     c_unica = clave_unica(
                         prov["nombre"],
                         datos_pdf.get("num_factura", ""),
@@ -1732,7 +1765,7 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
     print(f"  NF  No fiscales omitidos       : {len(r['no_fiscales'])}")
     print(f"  PEN Pendientes sin registrar   : {len(r['pendientes'])}")
     print(f"  CUE Facturas en cuerpo         : {len(r['factura_en_cuerpo'])}")
-    print(f"  PDF Sin PDF ni datos           : {len(r['sin_pdf'])}")
+    print(f"  PDF Sin PDF ni datos                        : {len(r['sin_pdf'])}")
     print(f"  ERR Errores                    : {len(r['errores'])}")
     if r["pendientes"]:
         print("  PENDIENTES_EXTRACCION (revisar manualmente):")
@@ -1761,14 +1794,12 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
         runtime_dir = skill_dir / "runtime"
         runtime_dir.mkdir(exist_ok=True)
         resultado_path = runtime_dir / "ultimo_resultado.json"
-        with open(resultado_path, "w", encoding="utf-8") as f:
-            json.dump(r, f, ensure_ascii=False, indent=2)
-        print(f"Resultado guardado en: {resultado_path}")
+        with open(resultado_path, "w", encoding="utf-8") as fj:
+            json.dump(r, fj, ensure_ascii=False, indent=2, default=str)
+        log(f"Resultado guardado: {resultado_path.name}")
     except Exception as e:
-        print(f"ADVERTENCIA: no se pudo guardar ultimo_resultado.json: {e}")
-
-    return 0
+        log(f"No se pudo guardar resultado JSON: {e}", "WARN")
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
