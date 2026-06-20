@@ -67,9 +67,25 @@ LOCK_TIMEOUT_MIN = 60
 # UTILIDADES
 # ─────────────────────────────────────────────────────────
 
+def configurar_salida_segura():
+    """FIX 10 / L-040: evitar UnicodeEncodeError en PowerShell Windows (cp1252)."""
+    import sys
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def log(msg: str, nivel: str = "INFO"):
     ts = datetime.now().strftime("%H:%M:%S")
-    print(f"[{ts}] [{nivel}] {msg}")
+    texto = f"[{ts}] [{nivel}] {msg}"
+    try:
+        print(texto, flush=True)
+    except UnicodeEncodeError:
+        # L-040: fallback ASCII seguro si la consola no admite Unicode
+        print(texto.encode("ascii", "replace").decode("ascii"), flush=True)
 
 
 def encontrar_skill_dir() -> Path:
@@ -148,14 +164,20 @@ class Lock:
                 log(f"⚠️  Lock activo (edad: {edad_min:.0f} min). Otra ejecución en curso.", "WARN")
                 return False
             else:
-                log(f"Lock antiguo detectado ({edad_min:.0f} min). Limpiando.", "WARN")
-                self.liberar()
-        self.path.write_text(datetime.now().isoformat())
+                log(f"Lock antiguo detectado ({edad_min:.0f} min). Omitiendo (L-039).", "WARN")
+                # L-039: no llamar liberar() — puede fallar en NTFS mount desde Linux
+        try:
+            self.path.write_text(datetime.now().isoformat())
+        except (PermissionError, FileNotFoundError, OSError):
+            pass  # L-039: si no podemos escribir, continuamos igual (dry-run seguro)
         return True
 
     def liberar(self):
-        if self.path.exists():
-            self.path.unlink()
+        try:
+            if self.path.exists():
+                self.path.unlink()
+        except (PermissionError, FileNotFoundError, OSError):
+            pass  # L-039: NTFS mount puede tener lock fantasma no eliminable desde Linux
 
 
 # ─────────────────────────────────────────────────────────
@@ -168,13 +190,13 @@ def autenticar(skill_dir: Path):
 
     if not creds_path.exists():
         print("\n" + "!" * 60)
-        print("❌ CREDENCIALES NO ENCONTRADAS")
+        print("[ERROR] CREDENCIALES NO ENCONTRADAS")
         print("!" * 60)
         print(f"\nFalta el archivo: {creds_path}")
         print("\nSolución:")
         print("  1. Ve a console.cloud.google.com")
         print("  2. Selecciona tu proyecto bordagran-fiscal")
-        print("  3. APIs & Services → Credentials")
+        print("  3. APIs & Services > Credentials")
         print("  4. Descarga el OAuth 2.0 Client ID")
         print(f"  5. Guárdalo como credentials.json en:\n     {skill_dir}\n")
         sys.exit(1)
@@ -210,7 +232,7 @@ def autenticar(skill_dir: Path):
                 flow = InstalledAppFlow.from_client_secrets_file(str(creds_path), SCOPES)
                 creds = flow.run_local_server(port=0, open_browser=True)
             except Exception as e:
-                print(f"\n❌ ERROR EN AUTENTICACIÓN OAUTH: {e}")
+                print(f"\n[ERROR AUTH OAUTH] {e}")
                 print("\nPosibles causas:")
                 print("  - credentials.json no es de tipo 'Desktop app'")
                 print("  - Las APIs de Gmail/Drive/Sheets no están habilitadas en GCP")
@@ -305,7 +327,19 @@ def es_email_excluido(email: str, exclusiones: list) -> dict | None:
 TIPOS_FISCALES = {"factura", "factura_simplificada", "factura_en_cuerpo", "factura_recibo_digital"}
 
 # Proveedores que pueden insertar con referencia tecnica autogenerada (sin num fiscal real)
-PROVEEDORES_REF_TECNICA = {"canva", "anthropic"}
+PROVEEDORES_REF_TECNICA = {
+    "canva", "anthropic",
+    # Proveedores ES con factura sin numero fiscal legible (L-036)
+    "workteam", "mayton",    # ropa laboral
+    "tiendanimal",           # suministros
+    "textilolius", "textil olius",  # textil
+    "vivadtf",               # impresion DTF
+    "velilla",               # uniformes (solo cuando tiene total)
+    # FIX 12 v3.1.0: proveedores identificados con num no estandar
+    "arkiplot",              # rotulacion/senaletica
+    "octopus",               # energia
+    "vinilosyserigrafia",    # vinilos y serigrafia
+}
 
 # IVA por defecto para proveedores ES sin IVA explicito en PDF
 # Solo aplica cuando tipo_doc es fiscal confirmado y base/iva_pct son None
@@ -316,6 +350,15 @@ PROVEEDORES_IVA_DEFAULT = {
     "vivadtf": 21,
     "dipgra": 21,
     "niba": 21,
+    # Añadidos en v3.1.0 (L-036): proveedores ES IVA 21% sin desglose en PDF
+    "workteam": 21,
+    "mayton": 21,
+    "tiendanimal": 21,
+    "textilolius": 21,
+    "textil olius": 21,
+    "vinilosyserigrafia": 21,  # FIX 13 v3.1.0
+    "arkiplot": 21,            # FIX 13 v3.1.0
+    "octopus": 21,             # FIX 13 v3.1.0
 }
 
 # Estado especial: datos insuficientes para insertar en Sheet
@@ -361,6 +404,7 @@ _KW_AVISO_BANCARIO = [
 _KW_PRESUPUESTO = [
     "presupuesto", "oferta económica", "propuesta económica",
     "quotation", "quote no", "estimate",
+    "proforma", "pro-forma",  # FIX 14 v3.1.0: proformas NO son facturas fiscales
 ]
 _KW_PEDIDO = [
     "orden de compra", "pedido nº", "pedido n°", "orden de pedido",
@@ -595,7 +639,7 @@ def _extraer_total_zona_resumen(texto: str) -> float | None:
     if not texto:
         return None
     # Patron prioritario: Total ( EUR ) 105,60
-    m_eur = re.search(r"Total\s*\(\s*EUR\s*\)\s*([\d\s.,]+)", texto, re.I)
+    m_eur = re.search(r"Total\s*\(\s*EUR\s*\)\s*([\d.,]+)", texto, re.I)
     if m_eur:
         g = m_eur.group(1).strip()
         raw = g.split()[-1] if " " in g else g
@@ -611,7 +655,7 @@ def _extraer_total_zona_resumen(texto: str) -> float | None:
         if "a transportar" not in l.lower()
     )
     patrones = [
-        r"Total\s*\(\s*EUR\s*\)[:\s]*([\d\s.,]+)",
+        r"Total\s*\(\s*EUR\s*\)[:\s]*([\d.,]+)",
         r"Total\s+Documento[:\s]+([\d\s.,]+)",
         r"Total\s+Neto[:\s]+([\d\s.,]+)",
         r"Valor\s+a\s+pagar[:\s]+([\d\s.,]+)",
@@ -838,6 +882,11 @@ def determinar_estado(datos_pdf: dict, es_desconocido: bool) -> str:
         return ESTADOS["REVISAR"]
     if not datos_pdf.get("num_factura"):
         return ESTADOS["REVISAR"]
+    # IVA 0% / RITI / exencion intracomunitaria -> revision fiscal obligatoria (L-033)
+    _notas = datos_pdf.get("notas", "") or ""
+    if datos_pdf.get("iva_pct") == 0 and re.search(
+            r"RITI|IVA.0pct|exencion|intracomunit", _notas, re.I):
+        return ESTADOS["REVISAR"]
     return ESTADOS["REGISTRADA"]
 
 
@@ -888,7 +937,30 @@ class AntiDuplicados:
                 num_n  = normalizar_texto(num)
                 if prov_n and num_n:
                     self._prov_num.add(f"{prov_n}::{num_n}")
-                fecha_n = fecha[:10]
+                # Normalizar fecha a ISO (L-034): el Sheet puede tener fecha raw
+                # ej: "May 13, 2026" (Anthropic) o "2026-05-13" (ISO) o "13/05/2026"
+                _mf = re.search(r"(\d{4}-\d{2}-\d{2})", fecha)
+                if _mf:
+                    fecha_n = _mf.group(1)
+                else:
+                    _MESES_C = {"jan":1,"feb":2,"mar":3,"apr":4,"may":5,"jun":6,
+                                "jul":7,"aug":8,"sep":9,"oct":10,"nov":11,"dec":12}
+                    _mt2 = re.search(r"([A-Za-z]{3})\w*[\s,]+(\d{1,2}),?\s+(\d{4})", fecha)
+                    if _mt2:
+                        _mc = _MESES_C.get(_mt2.group(1).lower())
+                        fecha_n = (f"{_mt2.group(3)}-{_mc:02d}-{int(_mt2.group(2)):02d}"
+                                   if _mc else fecha[:10])
+                    else:
+                        # "13 May 2026" o "Fri, 13 May 2026"
+                        _md3 = re.search(r"(\d{1,2})\s+([A-Za-z]{3})\w*\s+(\d{4})", fecha)
+                        if _md3:
+                            _m3 = _MESES_C.get(_md3.group(2).lower())
+                            fecha_n = (f"{_md3.group(3)}-{_m3:02d}-{int(_md3.group(1)):02d}"
+                                       if _m3 else fecha[:10])
+                        else:
+                            _md2 = re.search(r"(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})", fecha)
+                            fecha_n = (f"{_md2.group(3)}-{int(_md2.group(2)):02d}-{int(_md2.group(1)):02d}"
+                                       if _md2 else fecha[:10])
                 total_n = normalizar_texto(total)
                 if prov_n and fecha_n and total_n:
                     self._prov_fecha_total.add(f"{prov_n}::{fecha_n}::{total_n}")
@@ -927,7 +999,31 @@ class AntiDuplicados:
         prov_n = normalizar_texto(prov)
         num_n  = normalizar_texto(num)
         if prov_n and num_n: self._prov_num.add(f"{prov_n}::{num_n}")
-        fecha_n = (fecha or "")[:10]
+        # Normalizar fecha a ISO (L-034) — consistente con _cargar y es_duplicado
+        _fr = (fecha or "")
+        _mf6 = re.search(r"(\d{4}-\d{2}-\d{2})", _fr)
+        if _mf6:
+            fecha_n = _mf6.group(1)
+        else:
+            _M6 = {"jan":1,"feb":2,"mar":3,"apr":4,"may":5,"jun":6,
+                   "jul":7,"aug":8,"sep":9,"oct":10,"nov":11,"dec":12}
+            _mt6 = re.search(r"([A-Za-z]{3})\w*[\s,]+(\d{1,2}),?\s+(\d{4})", _fr)
+            if _mt6:
+                _mc6 = _M6.get(_mt6.group(1).lower())
+                fecha_n = (f"{_mt6.group(3)}-{_mc6:02d}-{int(_mt6.group(2)):02d}"
+                           if _mc6 else _fr[:10])
+            else:
+                _md6 = re.search(r"(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})", _fr)
+                if _md6:
+                    fecha_n = f"{_md6.group(3)}-{int(_md6.group(2)):02d}-{int(_md6.group(1)):02d}"
+                else:
+                    _md7 = re.search(r"(\d{1,2})\s+([A-Za-z]{3})\w*\s+(\d{4})", _fr)
+                    if _md7:
+                        _m7 = _M6.get(_md7.group(2).lower())
+                        fecha_n = (f"{_md7.group(3)}-{_m7:02d}-{int(_md7.group(1)):02d}"
+                                   if _m7 else _fr[:10])
+                    else:
+                        fecha_n = _fr[:10]
         total_n = normalizar_texto(str(total))
         if prov_n and fecha_n and total_n:
             self._prov_fecha_total.add(f"{prov_n}::{fecha_n}::{total_n}")
@@ -973,17 +1069,19 @@ def verificar_headers(sheet):
 
 def escribir_fila(sheet, datos_email: dict, datos_pdf: dict, extras: dict):
     fecha = datos_pdf.get("fecha") or datos_email.get("fecha_email", "")
-    # Calcular trimestre
+    # Calcular trimestre y normalizar fecha a ISO (L-034)
     trimestre = ""
+    fecha_iso = ""
     try:
         dt = dateparser.parse(fecha, dayfirst=True)
         if dt:
             trimestre = calcular_trimestre(dt)
+            fecha_iso = dt.strftime("%Y-%m-%d")
     except Exception:
         pass
 
     fila = [
-        fecha,                                              # A
+        fecha_iso or fecha,                                 # A — ISO preferido
         trimestre,                                          # B
         datos_email.get("proveedor_nombre", ""),           # C
         datos_email.get("remitente", ""),                  # D
@@ -1011,6 +1109,9 @@ def escribir_fila(sheet, datos_email: dict, datos_pdf: dict, extras: dict):
 # ─────────────────────────────────────────────────────────
 
 def main():
+    # L-040: configurar salida segura antes de cualquier print (PowerShell cp1252)
+    configurar_salida_segura()
+
     # Banner de inicio — siempre visible, antes de cualquier error (L-010)
     print("\n" + "=" * 60, flush=True)
     print("  BORDAGRAN FISCAL — Iniciando procesamiento de facturas", flush=True)
@@ -1052,7 +1153,7 @@ def main():
     else:
         skill_dir = encontrar_skill_dir()
         if not skill_dir:
-            print("❌ No se encontró la carpeta del skill.", flush=True)
+            print("[ERROR] No se encontro la carpeta del skill.", flush=True)
             print("   Usa --skill-dir /ruta/al/gmail-facturas-bordagran", flush=True)
             sys.exit(1)
 
@@ -1065,7 +1166,7 @@ def main():
         print("  [INFO] Lock forzado: archivo de bloqueo eliminado.", flush=True)
 
     if not lock.adquirir():
-        print("\n❌ BLOQUEADO: Ya hay una ejecución en curso (lock activo < 60 min).", flush=True)
+        print("\n[BLOQUEADO] Ya hay una ejecucion en curso (lock activo < 60 min).", flush=True)
         print(f"   Lock file: {lock.path}", flush=True)
         print("   Si el proceso anterior falló, usa --forzar para continuar:", flush=True)
         print("   python scripts/procesar_facturas.py --modo incremental --forzar --skill-dir .", flush=True)
@@ -1074,10 +1175,10 @@ def main():
     try:
         _ejecutar(args, skill_dir, dry_run=args.dry_run)
     except KeyboardInterrupt:
-        print("\n⚠️  Interrumpido por usuario (Ctrl+C)", flush=True)
+        print("\n[WARN] Interrumpido por usuario (Ctrl+C)", flush=True)
         sys.exit(130)
     except Exception as e:
-        print(f"\n❌ ERROR CRÍTICO: {e}", flush=True)
+        print(f"\n[ERROR CRITICO] {e}", flush=True)
         import traceback
         traceback.print_exc()
         sys.exit(1)
@@ -1517,6 +1618,9 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
                     continue
 
                 algun_pdf_nuevo = False
+                # Bandera por mensaje: evita que receipt Anthropic se inserte
+                # si la invoice del mismo email ya fue registrada O duplicada (L-035)
+                _anthropic_invoice_en_msg = False
 
                 for pdf_info in pdfs:
                     nombre_pdf = pdf_info["nombre"]
@@ -1633,15 +1737,54 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
                         nombre_drive = f"{fecha_norm}_{prov_norm}_REVISION_{msg_id[:8]}.pdf"
 
                     # Anti-duplicado (6 capas)
+                    # Normalizar fecha PDF a ISO para Capa 6 (evita mismatch "May 13, 2026" vs "2026-05-13")
+                    _f_raw = datos_pdf.get("fecha", "") or ""
+                    _fecha_para_dup = ""
+                    _m_iso = re.search(r"(\d{4}-\d{2}-\d{2})", _f_raw)
+                    if _m_iso:
+                        _fecha_para_dup = _m_iso.group(1)
+                    else:
+                        _MESES_EN = {"jan":1,"feb":2,"mar":3,"apr":4,"may":5,"jun":6,
+                                     "jul":7,"aug":8,"sep":9,"oct":10,"nov":11,"dec":12}
+                        _m_txt = re.search(r"([A-Za-z]{3})\w*[\s,]+(\d{1,2}),?\s+(\d{4})", _f_raw)
+                        if _m_txt:
+                            _mes_n = _MESES_EN.get(_m_txt.group(1).lower())
+                            if _mes_n:
+                                _fecha_para_dup = f"{_m_txt.group(3)}-{_mes_n:02d}-{int(_m_txt.group(2)):02d}"
+                        if not _fecha_para_dup:
+                            # "13 May 2026" o "Fri, 13 May 2026" -> DD MonthName YYYY
+                            _m_dmy2 = re.search(r"(\d{1,2})\s+([A-Za-z]{3})\w*\s+(\d{4})", _f_raw)
+                            if _m_dmy2:
+                                _m2 = _MESES_EN.get(_m_dmy2.group(2).lower())
+                                if _m2:
+                                    _fecha_para_dup = f"{_m_dmy2.group(3)}-{_m2:02d}-{int(_m_dmy2.group(1)):02d}"
+                        if not _fecha_para_dup:
+                            _m_dmy = re.search(r"(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})", _f_raw)
+                            if _m_dmy:
+                                _fecha_para_dup = f"{_m_dmy.group(3)}-{int(_m_dmy.group(2)):02d}-{int(_m_dmy.group(1)):02d}"
                     motivo_dup = anti_dup.es_duplicado(
                         pdf_hash, c_unica, msg_id, att_id, nombre_drive,
                         prov=prov["nombre"],
                         num=datos_pdf.get("num_factura",""),
-                        fecha=datos_pdf.get("fecha",""),
+                        fecha=_fecha_para_dup,
                         total=str(datos_pdf.get("total") or ""))
                     if motivo_dup:
-                        log(f"  → Duplicado: {motivo_dup}")
+                        log(f"  \u2192 Duplicado: {motivo_dup}")
                         r["duplicados"].append({"nombre": nombre_pdf, "motivo": motivo_dup})
+                        # L-035: si Anthropic invoice duplicada, activar bandera para receipt
+                        _pn_lower = prov["nombre"].lower()
+                        if "anthropic" in _pn_lower and tipo_doc in ("factura", "factura_digital", "factura_recibo_digital"):
+                            _anthropic_invoice_en_msg = True
+                        continue
+
+                    # L-035: Anthropic receipt omitido si invoice del mismo email
+                    # ya fue registrada o detectada como duplicada
+                    if (tipo_doc == "factura_recibo_digital"
+                            and "anthropic" in prov["nombre"].lower()
+                            and _anthropic_invoice_en_msg):
+                        motivo_receipt = "Anthropic receipt omitido: invoice asociada ya registrada/duplicada en mismo email"
+                        log(f"  \u2192 Duplicado: {motivo_receipt}")
+                        r["duplicados"].append({"nombre": nombre_pdf, "motivo": motivo_receipt})
                         continue
 
                     # Subir a Drive (solo si no es dry-run)
@@ -1769,6 +1912,10 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
                         escribir_fila(sheet, datos_email, datos_pdf, extras)
                     else:
                         log(f"  [DRY-RUN] Habria insertado: {prov['nombre']} | {datos_pdf.get('num_factura','?')} | {datos_pdf.get('total','?')}EUR")
+
+                    # L-035: activar bandera si Anthropic invoice registrada con éxito
+                    if "anthropic" in prov["nombre"].lower() and tipo_doc in ("factura", "factura_digital"):
+                        _anthropic_invoice_en_msg = True
 
                     # Actualizar indice anti-dup (siempre, tambien en dry-run)
                     anti_dup.registrar(
