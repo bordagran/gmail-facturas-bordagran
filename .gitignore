@@ -1,0 +1,40 @@
+# Credenciales y tokens — NUNCA subir a git
+credentials.json
+token.pickle
+token.json
+.env
+*.env
+
+# PDFs y descargas
+downloads/
+tmp/
+*.pdf
+
+# Runtime (locks, logs temporales)
+runtime/*.lock
+runtime/*.log
+runtime/*.json
+!runtime/.gitkeep
+
+# Logs con datos sensibles
+*.log
+logs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+runtime/*.csv
+runtime/*.txt
+
+*.bak

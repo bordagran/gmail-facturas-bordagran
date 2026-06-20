@@ -1,0 +1,8 @@
+[
+  {
+    "email": "admin-cyberactioning@arqus-alliance.eu",
+    "motivo": "Cliente / no proveedor",
+    "accion": "no_insertar_facturas",
+    "notas": "ARQUS-ALLIANCE es cliente de Bordagran, no proveedor. Sus emails no generan filas en FACTURA PROVEEDORES."
+  }
+]

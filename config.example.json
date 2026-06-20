@@ -1,0 +1,9 @@
+{
+  "SHEET_FACTURAS_ID": "TU_ID_SPREADSHEET_AQUI",
+  "SHEET_FACTURAS_NAME": "Facturas",
+  "SHEET_LOGS_ID": "TU_ID_SHEET_LOGS_AQUI",
+  "LABEL_PROCESADAS": "Facturas/Procesadas",
+  "LABEL_PENDIENTE": "Facturas/PendienteRevision",
+  "OWNER_EMAIL": "tu@email.com",
+  "DRIVE_ROOT_FOLDER_ID": "TU_ID_CARPETA_DRIVE_AQUI"
+}

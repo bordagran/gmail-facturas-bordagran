@@ -1,0 +1,234 @@
+[
+  {
+    "nombre": "Velilla Group",
+    "emails": [
+      "no-reply@velilla-group.com"
+    ],
+    "matchType": "exact",
+    "activo": true
+  },
+  {
+    "nombre": "Niba Energia",
+    "emails": [
+      "clientes@facturas.nibaenergia.es"
+    ],
+    "matchType": "exact",
+    "activo": true
+  },
+  {
+    "nombre": "Workteam / Mayton",
+    "emails": [
+      "facturacion@workteam.com"
+    ],
+    "matchType": "exact",
+    "activo": true
+  },
+  {
+    "nombre": "Radiokable",
+    "emails": [
+      "facturas@radiokable.net"
+    ],
+    "matchType": "exact",
+    "activo": true
+  },
+  {
+    "nombre": "GOR Factory",
+    "emails": [
+      "administracion@gorfactory.es"
+    ],
+    "matchType": "exact",
+    "activo": true
+  },
+  {
+    "nombre": "SOLS",
+    "emails": [
+      "no-reply@sols.es",
+      "clientes@sols.es"
+    ],
+    "matchType": "exact",
+    "activo": true
+  },
+  {
+    "nombre": "Anthropic",
+    "emails": [
+      "invoice+statements@mail.anthropic.com",
+      "billing@anthropic.com"
+    ],
+    "matchType": "exact",
+    "activo": true,
+    "notas": " Recibos (Receipt) con Invoice number = factura fiscal valida.",
+    "tipo_documento_esperado": "factura_recibo_digital"
+  },
+  {
+    "nombre": "Shopify",
+    "emails": [
+      "billing@shopify.com"
+    ],
+    "matchType": "exact",
+    "activo": true
+  },
+  {
+    "nombre": "Arkiplot (Laura)",
+    "emails": [
+      "laura@arkiplot.com"
+    ],
+    "matchType": "exact",
+    "activo": true
+  },
+  {
+    "nombre": "Octopus Energy",
+    "emails": [
+      "hola@octopusenergy.es"
+    ],
+    "matchType": "exact",
+    "activo": true
+  },
+  {
+    "nombre": "SEUR",
+    "emails": [
+      "noreply@seur.com"
+    ],
+    "matchType": "exact",
+    "activo": true
+  },
+  {
+    "nombre": "Felt Textil",
+    "emails": [
+      "felt@textil.org"
+    ],
+    "matchType": "exact",
+    "activo": true
+  },
+  {
+    "nombre": "LucusHost",
+    "emails": [
+      "contacto@lucushost.com"
+    ],
+    "matchType": "exact",
+    "activo": true
+  },
+  {
+    "nombre": "JHK T-Shirt",
+    "emails": [
+      "contact@jhktshirt.com"
+    ],
+    "matchType": "exact",
+    "activo": true
+  },
+  {
+    "nombre": "Inkplanet",
+    "emails": [
+      "comercial@inkplanet.net"
+    ],
+    "matchType": "exact",
+    "activo": true
+  },
+  {
+    "nombre": "WEBPOSITER",
+    "emails": [
+      "webpositer"
+    ],
+    "matchType": "contains",
+    "activo": true
+  },
+  {
+    "nombre": "Founder",
+    "emails": [
+      "founder"
+    ],
+    "matchType": "contains",
+    "activo": true
+  },
+  {
+    "nombre": "OpenAI",
+    "emails": [
+      "noreply@openai.com"
+    ],
+    "matchType": "exact",
+    "activo": true
+  },
+  {
+    "nombre": "Google Ads",
+    "emails": [
+      "accounts-noreply@google.com"
+    ],
+    "matchType": "exact",
+    "activo": true
+  },
+  {
+    "nombre": "Semrush",
+    "emails": [
+      "seo-ideas@semrush.com"
+    ],
+    "matchType": "exact",
+    "activo": true
+  },
+  {
+    "nombre": "Stripe",
+    "emails": [
+      "receipts+acct_1Mw652EhPHWN@stripe.com"
+    ],
+    "matchType": "exact",
+    "activo": true
+  },
+  {
+    "nombre": "Textil Olius (Patricia)",
+    "emails": [
+      "patricia.carceller@textil-olius.es"
+    ],
+    "matchType": "exact",
+    "activo": true
+  },
+  {
+    "nombre": "Beatriz Escañuela",
+    "emails": [
+      "beatriz"
+    ],
+    "matchType": "contains",
+    "activo": true
+  },
+  {
+    "nombre": "Magnifico",
+    "emails": [
+      "magnifico"
+    ],
+    "matchType": "contains",
+    "activo": true
+  },
+  {
+    "nombre": "Rosa Duarte Masegosa",
+    "emails": [
+      "rosa.duarte",
+      "rosaduarte"
+    ],
+    "matchType": "contains",
+    "activo": true
+  },
+  {
+    "nombre": "THCLOTHES / Organizações Biscana, Lda",
+    "emails": [
+      "marta.nazario@thclothes.com"
+    ],
+    "dominio": "thclothes.com",
+    "pais": "PT",
+    "notas": "Proveedor Portugal. Facturas en portugues: Fatura FT FES.YYYY/NNNN. IVA puede ser 0 (operacion intracomunitaria). | IVA 0% RITI | Total ( EUR ) en pie de pagina"
+  },
+  {
+    "nombre": "Canva",
+    "emails": [
+      "no-reply@canva.com",
+      "team@canva.com",
+      "billing@canva.com",
+      "no-reply@account.canva.com",
+      "account@canva.com",
+      "noreply@canva.com"
+    ],
+    "dominio": "canva.com",
+    "pais": "AU",
+    "notas": "Proveedor digital. Puede no enviar PDF: buscar factura en cuerpo del email. Canva Pro / Canva Teams. | account.canva.com mapea a CANVA",
+    "tipo_documento_esperado": "factura_recibo_digital",
+    "dominios_extra": [
+      "canva.com"
+    ]
+  }
+]
