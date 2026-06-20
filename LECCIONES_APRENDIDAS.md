@@ -349,10 +349,46 @@ Modo incremental SIN fechas usa `--dias` (default 7).
 
 **Regla**: `generar_resumen()` devuelve `base_total`, `iva_total`, `importe_total` separados.
 Solo suman estados `Registrada` o `Validada Carlos` (L-012).
-`filtrar_por_fecha()` usa col A (FECHA_FAC) primero, col N (FECHA_PROCESO) como fallback.
+`filtr
+## L-028 | resumen.py: nunca usar índices fijos para columnas del Sheet
 
-## L-027 | --desde/--hasta funciona en modo incremental y backfill
+**Problema**: `fila[6]` asumía que BASE estaba siempre en col G. Si el Sheet tiene columnas en orden diferente (o extras añadidas), se lee el dato equivocado y la suma sale imposible (ej: base=1976.21 > total=771.18).
 
-Si se pasan ambos `--desde` y `--hasta`, se usan independientemente del `--modo`.
-Modo backfill SIN fechas explícitas sigue requiriendo ambas.
-Modo incremental SIN fechas usa `--dias` (default 7).
+**Regla**: Siempre leer headers con `sheet.get_all_values()[0]` y detectar índices por nombre con `_detectar_columnas(headers)`. Usar alias para robustez ("base imponible", "base", "base eur", "base_eur", etc.).
+
+**Implementado en**: `resumen.py` — función `_detectar_columnas()` + `_get_col()`.
+
+## L-029 | Nunca insertar proveedor GMAIL/desconocido como factura fiscal
+
+**Problema**: Emails cuyo dominio no está en `proveedores.json` obtenían `_desconocido=True` pero seguían insertándose en el Sheet con estado "Revisar". Contaminaba el registro con filas sin proveedor real (ej: GMAIL | B267102991 | 261.72 EUR).
+
+**Regla**: Si `es_desconocido=True` → `continue` inmediatamente. Añadir a `r["pendientes"]` con motivo `proveedor_real_no_identificado`. No insertar fila fiscal. Etiquetar en Gmail solo en ejecución real.
+
+## L-030 | Anthropic factura+recibo: deduplicar por referencia técnica estable
+
+**Problema**: Anthropic envía dos emails por cargo (factura + recibo). Con `msg_id[:8]` en la ref técnica, cada email generaba una ref distinta → `c_unica` diferente → ambos pasaban el anti-dup → dos filas en el Sheet.
+
+**Raíz**: `c_unica` se calculaba con `num_factura` vacío (antes de asignar la ref técnica). Los sets `_exec_*` no existían; solo `anti_dup` (cargado del Sheet al inicio) podía detectar dups, pero la primera factura aún no estaba en el Sheet durante la misma ejecución.
+
+**Solución**:
+1. Ref técnica usa `md5(prov_code + fecha_iso + total_str)[:8]` — estable entre emails
+2. `c_unica` se recomputa DESPUÉS de asignar la ref técnica
+3. Sets intra-ejecución `_exec_claves`, `_exec_prov_num`, `_exec_hashes` detectan dups en la misma pasada antes de llegar a "Habria insertado" o `escribir_fila()`
+
+## L-031 | resumen.py: base imponible puede estar vacía en el Sheet; derivar si hay IVA
+
+**Problema**: Algunas filas SOLS tienen la celda BASE vacía (campo no escrito por el procesador en ciertos paths). El resumen mostraba base=0 para esas facturas aunque IVA€ y Total eran correctos.
+
+**Regla**: Si `base==0 and iva>0 and total>iva` → `base = round(total - iva, 2)`. La condición `iva>0` garantiza que Canva/Anthropic (sin IVA) no reciban base inventada.
+
+## L-032 | Protocolo obligatorio antes/después de ejecución real trimestral
+
+**Antes de ejecutar real**:
+1. `python scripts\procesar_facturas.py --modo incremental --desde YYYY-MM-DD --hasta YYYY-MM-DD --skill-dir . --dry-run`
+2. Revisar que "Errores: 0" y que los "Habria registrado" son los esperados
+3. Revisar que no aparece el mismo proveedor+importe más de una vez
+
+**Después de ejecutar real**:
+1. `python scripts\detectar_duplicados_sheet.py --skill-dir .` → debe decir "0 duplicados"
+2. `python scripts\resumen.py --periodo trimestral --skill-dir .` → verificar cifras coherentes
+3. No repetir ejecución real del mismo rango si ya fue validado

@@ -11,7 +11,7 @@ description: >
   y cada día a las 20:00 (resumen diario).
 ---
 
-# Skill: gmail-facturas-bordagran v3.0
+# Skill: gmail-facturas-bordagran v3.0.1
 
 ## Reglas de oro (no negociables)
 
@@ -223,8 +223,42 @@ Genera `runtime/duplicados_detectados.csv` con grupos de filas posiblemente dupl
 | Velilla | num_factura real requerido | 21% ES | Sin num -> PENDIENTE |
 | VIVADTF | num_factura real requerido | 21% ES | myParcel = invalido |
 | DIPGRA | patrones generales ES | 21% ES | |
+
 
-### Seguridad (L-011 a L-027)
-- Gate anti-contaminacion: NUNCA insertar si total=None/0 o num invalido/vacio
-- Solo Canva y Anthropic pueden usar referencia tecnica autogenerada
-- `.gitignore` verificado antes de cada commit
+## Reglas operativas v3.0.1 (añadidas 2026-06-20)
+
+### Deduplicación intra-ejección
+- Los sets `_exec_claves`, `_exec_prov_num`, `_exec_hashes` detectan dups durante la misma pasada
+- `c_unica` siempre se recomputa DESPUÉS de asignar ref técnica (antes fallaba con num vacío)
+- Aplica tanto en dry-run como en ejecución real
+
+### Proveedores desconocidos / GMAIL
+- Si dominio no está en `proveedores.json`: `es_desconocido=True` -> `continue`, nunca `escribir_fila()`
+- Va a `r["pendientes"]` con motivo `proveedor_real_no_identificado`
+- NUNCA insertar fila con proveedor GMAIL, outlook.com, hotmail.com etc. como factura fiscal
+
+### Referencias técnicas estables
+- Ref técnica = `md5(prov_code + fecha_iso + total_str)[:8]`, no `msg_id[:8]`
+- Mismo hash para Anthropic factura y recibo -> segunda detectada como `duplicado intra-ejecucion`
+
+### resumen.py: columnas por nombre, no por índice
+- `_detectar_columnas(headers)` mapea "Base Imponible", "IVA €", "Importe Total" por nombre real
+- Si base=0 y IVA>0 y total>IVA: base = total - IVA (derivación defensiva)
+- Condición IVA>0 evita inventar base para Canva/Anthropic
+
+### Protocolo ejecución trimestral
+```
+# 1. Dry-run obligatorio
+python scripts\procesar_facturas.py --modo incremental --desde YYYY-MM-DD --hasta YYYY-MM-DD --skill-dir . --dry-run
+# 2. Ejecucion real (solo si dry-run OK)
+python scripts\procesar_facturas.py --modo incremental --desde YYYY-MM-DD --hasta YYYY-MM-DD --skill-dir .
+# 3. Verificacion post-ejecucion (ambos obligatorios)
+python scripts\detectar_duplicados_sheet.py --skill-dir .
+python scripts\resumen.py --periodo trimestral --skill-dir .
+```
+
+### Resultado Q2 2026 (referencia validada)
+- Periodo: 2026-04-01 -> 2026-06-20
+- Documentos fiscales: 9 | Base: 585.71 EUR | IVA: 123.00 EUR | Total: 771.18 EUR
+- SOLS x4 (708.71) | Canva x3 (36.00) | Anthropic x2 (26.47)
+- Tag: v3.0.1 | Commit: 11a132a

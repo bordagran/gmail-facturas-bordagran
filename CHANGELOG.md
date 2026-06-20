@@ -239,10 +239,41 @@ Tipos: ADD (nuevo), FIX (corrección), UPDATE (mejora), BREAK (cambio incompatib
 - Lee fila 1 real del Sheet antes de escribir
 - Detecta si faltan columnas BASE, IVA_PCT, IVA_EUR, TOTAL y avisa
 - Verifica que cols O-R (MSG_ID, ATT_ID, HASH, CLAVE_UNICA) existan
-- No desplaza columnas existentes
+- No desplaza columnas e
+## [3.0.1] - 2026-06-20
 
-### Seguridad (sin cambios, confirmado)
-- Gate anti-contaminacion v2.9 intacto: nunca inserta si total=None/0 o num invalido
-- PROVEEDORES_REF_TECNICA = {"canva", "anthropic"} sin cambios
-- .gitignore verificado antes del commit
+### Deduplicación intra-ejecución reforzada (procesar_facturas.py)
+- Sets locales `_exec_claves`, `_exec_prov_num`, `_exec_hashes` inicializados al arranque
+- `c_unica` recomputada DESPUÉS de asignar la referencia técnica (antes se calculaba con num_factura vacío)
+- Resultado: Anthropic factura+recibo del mismo periodo ya no se registran doble
+- Motivo de duplicado visible en log: `duplicado intra-ejecucion (clave|hash|prov+num)`
 
+### Referencias técnicas estables (procesar_facturas.py)
+- Ref técnica de proveedor digital ya no usa `msg_id[:8]` (cambiaba según email origen)
+- Nuevo: `md5(prov_code + fecha_iso + total_str)[:8]` — mismo hash independientemente del email
+- Aplica tanto al path PDF como al path de factura-en-cuerpo
+
+### Bloqueo de proveedores desconocidos / GMAIL (procesar_facturas.py)
+- Si `es_desconocido=True` (dominio no mapeado en proveedores.json): `continue` — no se inserta fila
+- Se añade a `r["pendientes"]` con nota `proveedor_real_no_identificado`
+- Etiquetado Gmail como pendiente solo en ejecución real (no en dry-run)
+
+### resumen.py: detección dinámica de columnas por header
+- Eliminados índices hardcodeados (`fila[6]`, `fila[8]`, `fila[9]`)
+- Nueva función `_detectar_columnas(headers)`: busca por nombre real con lista de alias
+- Alias de IVA €: "iva eur", "iva_eur", "iva euros", "iva", "iva €", "cuota iva", "importe iva"
+- Fallback a COL dict si el Sheet no tiene headers reconocibles
+
+### resumen.py: derivación defensiva de base imponible
+- Si base=0 y IVA€>0 y total>IVA: `base = total - iva` (evita base 0 cuando el Sheet la tiene vacía)
+- Condición IVA>0 impide inventar base para Canva/Anthropic (IVA=0 en esas facturas)
+- Guardia: si base>total en una fila, se descarta esa base (señal de columna mal mapeada)
+- Corrige resumen incoherente anterior: base 1976.21 EUR → correcta 585.71 EUR
+
+### Resultado Q2 2026-04-01 → 2026-06-20 (validado)
+- Documentos fiscales: 9
+- Base imponible total: 585.71 EUR
+- IVA fiscal total: 123.00 EUR
+- Importe fiscal total: 771.18 EUR
+- SOLS: 4 facturas (708.71 EUR) | Canva: 3 (36.00 EUR) | Anthropic: 2 (26.47 EUR)
+- Duplicados detectados post-ejecución: 0
