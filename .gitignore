@@ -33,8 +33,6 @@ build/
 # OS
 .DS_Store
 Thumbs.db
-
-runtime/*.csv
-runtime/*.txt
-
-*.bak
+scripts/*.bak
+runtime/diagnostico_*.txt
+runtime/duplicados_*.csv

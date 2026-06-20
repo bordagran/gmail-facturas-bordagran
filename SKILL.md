@@ -11,7 +11,7 @@ description: >
   y cada día a las 20:00 (resumen diario).
 ---
 
-# Skill: gmail-facturas-bordagran v2.4
+# Skill: gmail-facturas-bordagran v3.0
 
 ## Reglas de oro (no negociables)
 
@@ -198,3 +198,33 @@ python scripts/detectar_duplicados_sheet.py --skill-dir .
 ```
 
 Genera `runtime/duplicados_detectados.csv` con grupos de filas posiblemente duplicadas (NO borra nada).
+
+---
+
+## Reglas operativas v3.0 (añadidas 2026-06-20)
+
+### CLI: rango de fechas
+- `--desde YYYY-MM-DD --hasta YYYY-MM-DD` funciona en modo incremental Y backfill
+- Gmail `before:` = `--hasta + 1 dia` (L-024, exclusivo por API)
+- Sin fechas explícitas: usar `--dias` (default 7)
+
+### Resumen trimestral
+- `python scripts/resumen.py --periodo trimestral --skill-dir .`
+- `python scripts/resumen.py --desde 2026-01-01 --hasta 2026-03-31 --skill-dir .`
+- Dry-run trimestral OBLIGATORIO antes de ejecucion real de backfill Q
+
+### Fiscalidad por proveedor
+| Proveedor | Num. factura | IVA | Notas |
+|-----------|-------------|-----|-------|
+| SOLS | `\d{4}[A-Z]{2}\d{5}` ej: 2606FV05503 | 21% ES | Derivar base si solo total |
+| THClothes | FES.YYYY/NNNN via PT | 0% RITI | Total ( EUR ) como prioridad |
+| Canva | Ref tecnica CANVA_... | 0% intra | Sin breakdown fiscal |
+| Anthropic | Invoice number del PDF | 0% intra | Amount paid en PDF |
+| Velilla | num_factura real requerido | 21% ES | Sin num -> PENDIENTE |
+| VIVADTF | num_factura real requerido | 21% ES | myParcel = invalido |
+| DIPGRA | patrones generales ES | 21% ES | |
+
+### Seguridad (L-011 a L-027)
+- Gate anti-contaminacion: NUNCA insertar si total=None/0 o num invalido/vacio
+- Solo Canva y Anthropic pueden usar referencia tecnica autogenerada
+- `.gitignore` verificado antes de cada commit

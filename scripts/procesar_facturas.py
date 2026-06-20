@@ -662,7 +662,12 @@ def extraer_datos_pdf(ruta: str) -> dict:
         if not datos["num_factura"]:
             m = re.search(r"Receipt\s+(?:number|no\.?|#)[:\s]+([A-Z0-9\-\/]+)", t, re.I)
             if m: datos["num_factura"] = m.group(1).strip()
-        # 4. Patrones generales ES/EN
+        # 4. SOLS: patron especifico ddddLLddddd (ej: 2606FV05503)
+        if not datos["num_factura"]:
+            m = re.search(r"\b(\d{4}[A-Z]{2}\d{5})\b", t)
+            if m:
+                datos["num_factura"] = m.group(1)
+        # 5. Patrones generales ES/EN
         if not datos["num_factura"]:
             for pat in [
                 r"(?:N[uo]mero|No\.?|Factura\s+N[o]?\.?|Fra\.?\s*N[o]?)[:\s#]*([A-Z0-9\-\/]{3,30})",
@@ -922,13 +927,37 @@ class AntiDuplicados:
 # ─────────────────────────────────────────────────────────
 
 def verificar_headers(sheet):
-    """Verifica que las columnas O-R existan, si no, avisa."""
+    """Lee headers reales del Sheet, detecta si faltan columnas fiscales.
+    NUNCA desplaza columnas O-R (indices 14-17: MSG_ID, ATT_ID, HASH, CLAVE_UNICA).
+    """
     headers = sheet.row_values(1)
-    esperados_extra = ["Gmail Message ID", "Gmail Attachment ID", "Hash PDF", "Clave Única Factura"]
-    for i, h in enumerate(esperados_extra, start=15):
-        if len(headers) < i or not headers[i-1]:
-            log(f"⚠️  Columna {chr(64+i)} ('{h}') no encontrada en el Sheet.", "WARN")
-            log(f"   → Añádela manualmente en la fila 1, columna {chr(64+i)}", "WARN")
+    h_lower = [h.strip().lower() for h in headers]
+
+    # Columnas fiscales y alternativas de nombre
+    COLS_FISCALES = [
+        ("BASE",    ["base", "base imponible", "base eur"]),
+        ("IVA_PCT", ["iva%", "iva pct", "iva porcentaje", "iva_pct", "iva %"]),
+        ("IVA_EUR", ["iva eur", "iva_eur", "iva euros"]),
+        ("TOTAL",   ["total", "total eur", "importe total"]),
+    ]
+    # Columnas protegidas O-R (indices 14-17)
+    COLS_PROT = [
+        "Gmail Message ID", "Gmail Attachment ID", "Hash PDF", "Clave Unica Factura"
+    ]
+
+    # Verificar protegidas
+    for i, h in enumerate(COLS_PROT, start=14):
+        if len(headers) <= i or not headers[i]:
+            log(f"WARN: Columna protegida {chr(65+i)} ('{h}') no encontrada", "WARN")
+
+    # Detectar columnas fiscales faltantes
+    faltantes = []
+    for nombre, alts in COLS_FISCALES:
+        if not any(a in h_lower for a in alts):
+            faltantes.append(nombre)
+    if faltantes:
+        log(f"Columnas fiscales no detectadas en Sheet: {faltantes}", "WARN")
+        log("Verifica que la fila 1 del Sheet contenga: BASE, IVA_PCT, IVA_EUR, TOTAL", "WARN")
 
 
 def escribir_fila(sheet, datos_email: dict, datos_pdf: dict, extras: dict):
@@ -1335,20 +1364,23 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
     exclusiones = cargar_exclusiones(skill_dir)
     log(f"{len(exclusiones)} exclusiones cargadas")
 
-    # Construir query
-    if args.modo == "backfill":
-        if not args.desde or not args.hasta:
-            log("❌ Modo backfill requiere --desde YYYY-MM-DD y --hasta YYYY-MM-DD", "ERROR")
-            sys.exit(1)
+    # Construir query Gmail con rango de fechas
+    if args.desde and args.hasta:
+        # Rango explicito: funciona en incremental y backfill
         desde_dt = datetime.strptime(args.desde, "%Y-%m-%d")
         hasta_dt = datetime.strptime(args.hasta, "%Y-%m-%d")
+        # Gmail "before:" es EXCLUSIVO -> sumar 1 dia
+        hasta_excl = hasta_dt + timedelta(days=1)
         rango = (f"after:{desde_dt.strftime('%Y/%m/%d')} "
-                 f"before:{hasta_dt.strftime('%Y/%m/%d')}")
-        log(f"Backfill: {args.desde} → {args.hasta}")
+                 f"before:{hasta_excl.strftime('%Y/%m/%d')}")
+        log(f"Rango: {args.desde} -> {args.hasta} (Gmail before: {hasta_excl.strftime('%Y/%m/%d')})")
+    elif args.modo == "backfill":
+        log("❌ Modo backfill requiere --desde YYYY-MM-DD y --hasta YYYY-MM-DD", "ERROR")
+        sys.exit(1)
     else:
         hace_n = datetime.now() - timedelta(days=args.dias)
         rango = f"after:{hace_n.strftime('%Y/%m/%d')}"
-        log(f"Incremental: últimos {args.dias} días")
+        log(f"Incremental: ultimos {args.dias} dias")
 
     # Query principal: PDFs de todos los proveedores
     queries = [
@@ -1375,7 +1407,7 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
     # Resultados
     r = {"procesados": [], "duplicados": [], "sin_pdf": [], "errores": [],
          "no_fiscales": [], "pendientes": [], "factura_en_cuerpo": [],
-         "total_eur": 0.0, "iva_total": 0.0}
+         "total_eur": 0.0, "iva_total": 0.0, "base_total": 0.0}
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         for i, msg_info in enumerate(mensajes):
@@ -1675,6 +1707,7 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
                     })
                     r["total_eur"] += total
                     r["iva_total"] += iva
+                    r["base_total"] += datos_pdf.get("base", 0) or 0
                     log(f"  ✅ Registrado | {total:.2f}€ | {estado}")
 
                 # Etiquetar email como procesado (solo si no es dry-run)
@@ -1718,8 +1751,9 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
         print("  Detalle duplicados:")
         for dup in r["duplicados"]:
             print(f"    - {dup['nombre']}: {dup['motivo']}")
-    print(f"  EUR Importe total         : {r['total_eur']:.2f} EUR")
+    print(f"  EUR Base imponible total  : {r['base_total']:.2f} EUR")
     print(f"  IVA IVA total             : {r['iva_total']:.2f} EUR")
+    print(f"  EUR Importe total         : {r['total_eur']:.2f} EUR")
     print("=" * 60 + "\n")
 
     # Guardar resultado JSON

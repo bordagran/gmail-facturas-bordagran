@@ -213,3 +213,36 @@ Tipos: ADD (nuevo), FIX (corrección), UPDATE (mejora), BREAK (cambio incompatib
 - Nueva clave `r["pendientes"]`: solo documentos con `_pendiente_extraccion=True`
 - THClothes sin total → `PEN Pendientes sin registrar` (no mezclado con albaranes/ARQUS)
 - Resumen muestra sección separada `PENDIENTES_EXTRACCION (revisar manualmente)`
+
+## [3.0.0] - 2026-06-20
+
+### Rango de fechas flexible (--desde / --hasta)
+- `--desde YYYY-MM-DD` + `--hasta YYYY-MM-DD` funcionan ahora en modo incremental Y backfill
+- Gmail `before:` calculado como `hasta + 1 dia` (exclusivo por diseno de la API)
+- `--dias` sigue funcionando como fallback cuando no se pasan fechas explicitas
+- L-024: documentado el comportamiento exclusivo de `before:` en Gmail
+
+### Resumen trimestral (resumen.py v3.0)
+- Nuevo `--periodo trimestral`: calcula automaticamente el trimestre actual
+- Nuevos `--desde` / `--hasta` en resumen.py para rango personalizado
+- Output ahora muestra 3 cifras separadas: base imponible, IVA, total (L-026)
+- `filtrar_por_fecha()` usa col A (FECHA_FAC) primero, col N como fallback
+- `calcular_trimestre_desde()`: devuelve rango exacto Q1-Q4 del ano
+
+### Extraccion fiscal completa
+- SOLS: nuevo patron `\d{4}[A-Z]{2}\d{5}` extrae numero real (ej: `2606FV05503`) — L-025
+- Derivacion fiscal si 2 de 3 datos conocidos: base+IVA%->total, total+IVA%->base, base+total->IVA%
+- RITI/intracomunitario: IVA=0, base=total (ya implementado v2.7, confirmado)
+- Acumulador `base_total` en dry-run: visible en resumen final junto a IVA y total
+
+### Sheet headers: verificar_headers() mejorado
+- Lee fila 1 real del Sheet antes de escribir
+- Detecta si faltan columnas BASE, IVA_PCT, IVA_EUR, TOTAL y avisa
+- Verifica que cols O-R (MSG_ID, ATT_ID, HASH, CLAVE_UNICA) existan
+- No desplaza columnas existentes
+
+### Seguridad (sin cambios, confirmado)
+- Gate anti-contaminacion v2.9 intacto: nunca inserta si total=None/0 o num invalido
+- PROVEEDORES_REF_TECNICA = {"canva", "anthropic"} sin cambios
+- .gitignore verificado antes del commit
+

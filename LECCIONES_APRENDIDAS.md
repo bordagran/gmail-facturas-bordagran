@@ -299,3 +299,60 @@ estaba truncado desde la línea 191.
 
 **Fecha limpia**: Usar _fecha_iso_de_raw() para convertir fecha RFC email a YYYY-MM-DD antes de incluirla en cualquier referencia o log.
 
+
+## L-024 | Gmail before: es exclusivo — siempre sumar 1 dia a --hasta
+
+**Problema**: Gmail `before:YYYY/MM/DD` excluye ese dia. Si el usuario pide `--hasta 2026-03-31`, la query debe ser `before:2026/04/01` para incluir todo el dia 31.
+
+**Regla**: `hasta_excl = hasta_dt + timedelta(days=1)`. Siempre usar `hasta_excl` en la query Gmail, nunca `hasta_dt` directamente.
+
+**Aplica en**: modo incremental con `--desde`/`--hasta`, modo backfill, resumen trimestral.
+
+## L-025 | SOLS: numero real tiene patron ddddLLddddd
+
+**Patron**: `\b(\d{4}[A-Z]{2}\d{5})\b` — ejemplo: `2606FV05503` (año+mes + tipo + secuencia).
+**Parser**: paso 4 en `extraer_dados_pdf()`, antes de patrones generales.
+**es_num_factura_valido()**: aprueba porque tiene digitos y es alfanumerico de 11 chars.
+**IVA**: SOLS es espanola, IVA 21% estandar. Derivacion: si total sin base -> `base = total/1.21`.
+
+## L-026 | resumen.py: base_total separado de importe_total
+
+**Razon fiscal**: para declaracion trimestral IVA se necesitan 3 cifras separadas: base imponible, cuota IVA, total factura. No es suficiente mostrar solo el total.
+
+**Regla**: `generar_resumen()` devuelve `base_total`, `iva_total`, `importe_total` por separado.
+Solo suman filas con estado `Registrada` o `Validada Carlos` (L-012).
+`filtrar_por_fecha()` usa col A (FECHA_FAC) primero, col N (FECHA_PROCESO) como fallback.
+
+## L-027 | --desde/--hasta funciona en modo incremental y backfill
+
+**Cambio v3.0**: Si se pasan ambos `--desde` y `--hasta`, se usan independientemente del `--modo`.
+Modo backfill SIN fechas explícitas sigue requiriendo ambas.
+Modo incremental SIN fechas usa `--dias` (default 7).
+
+## L-024 | Gmail before: es exclusivo -- siempre sumar 1 dia a --hasta
+
+**Problema**: Gmail `before:YYYY/MM/DD` excluye ese dia. Si el usuario pide `--hasta 2026-03-31`, la query debe ser `before:2026/04/01` para incluir todo el dia 31.
+
+**Regla**: `hasta_excl = hasta_dt + timedelta(days=1)`. Siempre usar `hasta_excl` en la query Gmail, nunca `hasta_dt` directamente.
+
+**Aplica en**: modo incremental con `--desde`/`--hasta`, modo backfill.
+
+## L-025 | SOLS: numero real tiene patron ddddLLddddd
+
+**Patron**: `\b(\d{4}[A-Z]{2}\d{5})\b` -- ejemplo: `2606FV05503` (anno+mes + tipo + secuencia).
+**Parser**: paso 4 en `extraer_dados_pdf()`, antes de patrones generales.
+**IVA**: SOLS es espanola, IVA 21% estandar. Derivacion: si total sin base -> `base = total/1.21`.
+
+## L-026 | resumen.py: base_total separado de importe_total
+
+**Razon fiscal**: para declaracion trimestral IVA se necesitan 3 cifras: base imponible, cuota IVA, total. No es suficiente mostrar solo el total.
+
+**Regla**: `generar_resumen()` devuelve `base_total`, `iva_total`, `importe_total` separados.
+Solo suman estados `Registrada` o `Validada Carlos` (L-012).
+`filtrar_por_fecha()` usa col A (FECHA_FAC) primero, col N (FECHA_PROCESO) como fallback.
+
+## L-027 | --desde/--hasta funciona en modo incremental y backfill
+
+Si se pasan ambos `--desde` y `--hasta`, se usan independientemente del `--modo`.
+Modo backfill SIN fechas explícitas sigue requiriendo ambas.
+Modo incremental SIN fechas usa `--dias` (default 7).
