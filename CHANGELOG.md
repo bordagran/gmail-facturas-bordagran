@@ -1,4 +1,91 @@
 # CHANGELOG — gmail-facturas-bordagran
+## [3.1.0] - 2026-06-20
+
+### Fix: THCLOTHES — extracción de total sin capturar saltos de línea (FIX 1)
+- Regex `Total\s*\(\s*EUR\s*\)\s*([\d\s.,]+)` capturaba la línea siguiente (fecha)
+  y producía `total=None` al fallar la conversión numérica.
+- Corregido a `([\d.,]+)` — solo dígitos, puntos y comas, sin espacios.
+- Afectadas: `_extraer_total_zona_resumen()`, dos variantes del patrón.
+
+### Fix: THCLOTHES — estado Revisar para facturas RITI / IVA 0% (FIX 2, L-033)
+- Facturas intracomunitarias PT→ES tienen IVA 0% por exención RITI.
+- `determinar_estado()` devuelve ahora `Revisar` cuando `iva_pct==0` y las notas
+  contienen "RITI", "IVA 0pct", "exencion" o "intracomunit".
+- Garantiza revisión fiscal manual antes de cualquier deducción.
+
+### Fix: fechas — normalización ISO en todo el ciclo anti-dup (FIX 3-6, L-034)
+- **FIX 3** (`_ejecutar`): normaliza `datos_pdf["fecha"]` a ISO antes de llamar
+  a `anti_dup.es_duplicado()` (Capa 6: prov+fecha+total).
+- **FIX 4+4b** (`_cargar`): normaliza fecha raw del Sheet al cargar en memoria,
+  incluyendo el caso "Fri, 13 May 2026" (día de la semana prefijado).
+- **FIX 5** (`escribir_fila`): escribe siempre ISO `YYYY-MM-DD` en columna A.
+- **FIX 6** (`registrar`): normaliza fecha en los sets intra-ejecución para dedup
+  correcto entre facturas del mismo trimestre procesadas en la misma pasada.
+
+### Fix: Anthropic — receipt no duplica gasto si invoice del mismo email ya registrada (FIX 7, L-035)
+- Flag `_anthropic_invoice_en_msg` por mensaje Gmail: se activa cuando la invoice
+  Anthropic se registra O se detecta como duplicada en el mismo msg_id.
+- Si el flag está activo y aparece un `factura_recibo_digital` Anthropic en el
+  mismo mensaje → se descarta con motivo "Anthropic receipt omitido: invoice
+  asociada ya registrada/duplicada en mismo email".
+- Sin este fix: la recarga API de 8.47 EUR se insertaba dos veces (invoice + receipt).
+
+### Fix: parsers — proveedores de bajo riesgo con num_factura no legible (FIX 8-9, L-036)
+- Ampliado `PROVEEDORES_REF_TECNICA` con proveedores españoles que emiten facturas
+  sin número legible por pdfplumber pero sí tienen total extraído:
+  `workteam`, `mayton`, `tiendanimal`, `textilolius`, `textil olius`,
+  `vivadtf`, `velilla` (solo cuando tiene total > 0).
+- Ampliado `PROVEEDORES_IVA_DEFAULT` con IVA 21% para los mismos proveedores ES.
+- Impacto estimado: 39 pendientes → ~28 (recuperación ~11 facturas por lote).
+- Criterio de inclusión: proveedor conocido + total extraído + riesgo fiscal bajo.
+- Excluidos intencionalmente: BBVA (justificante bancario, no factura fiscal),
+  GMAIL genérico (proveedor no identificado), Radiokable/GOR (total=None).
+
+### Fix: logging seguro Windows/cp1252 — UnicodeEncodeError (FIX 10, L-040)
+- PowerShell Windows usa cp1252 por defecto; los símbolos → ❌ ⚠️ ✅ causaban crash
+  antes de completar cualquier dry-run (falla en la primera línea de duplicado).
+- `configurar_salida_segura()`: reconfigura stdout/stderr a UTF-8 con `errors='replace'`
+  al inicio de `main()`.
+- `log()` blindada con `try/except UnicodeEncodeError` → fallback ASCII.
+- `print()` directos con emoji fuera de `log()` reemplazados por etiquetas ASCII seguras.
+- Sin este fix ningún dry-run en Windows era fiable.
+
+### Fix: proveedores faltantes en prov.json + REF_TECNICA + clasificador (FIX 11-14)
+Dry-run lote 2 validado: 39→35→23 pendientes | 3→7→14 registradas | 0 errores.
+
+**FIX 11 — 4 nuevos proveedores en `references/proveedores.json`:**
+- `Textilolius` (textilolius@textilolius.com / textilolius.com) — distinto de Textil Olius/Patricia
+- `Tiendanimal` (no-reply.store@tiendanimal.es / tiendanimal.es)
+- `VIVADTF` (pedidos@vivadtf.com / vivadtf.com)
+- `Vinilos y Serigrafia` (info@vinilosyserigrafia.com / vinilosyserigrafia.com)
+- Causa raíz: estos proveedores caían en DESCONOCIDO porque su email remitente
+  no estaba en prov.json, impidiendo que REF_TECNICA funcionara.
+
+**FIX 12 — Ampliar `PROVEEDORES_REF_TECNICA`:**
+- Añadidos: `arkiplot`, `octopus`, `vinilosyserigrafia`
+- Arkiplot y Octopus ya estaban en prov.json pero sin REF_TECNICA → pendiente_extraccion.
+
+**FIX 13 — Ampliar `PROVEEDORES_IVA_DEFAULT`:**
+- Añadidos al 21%: `vinilosyserigrafia`, `arkiplot`, `octopus`
+
+**FIX 14 — Bug clasificador: proformas pasaban como `factura` (L-041):**
+- `PROFORMA-PRE-*.pdf` de WORKTEAM se clasificaban como `factura` porque el
+  texto del PDF contiene "factura" en la referencia de pago pero no "presupuesto".
+- Añadidos `"proforma"` y `"pro-forma"` a `_KW_PRESUPUESTO`.
+- Resultado: 2 proformas WORKTEAM → `no_fiscales` (correcto).
+
+**Impacto real dry-run lote 2 (2026-04-01 → 2026-06-20):**
+- Nuevas registradas: +7 (Textilolius×2, Tiendanimal×2, VIVADTF×1, Arkiplot×1,
+  Octopus×1, Vinilos y Serigrafia×1)
+- Base imponible total simulada: 1917.39 EUR | IVA: 180.03 EUR | Total: 2097.42 EUR
+- Pendientes restantes: 23 (GMAIL×9 forwarded, BBVA×2 no-fiscal, Radiokable×3
+  total=None, Velilla×4 total=None o abono, GOR/DIPGRA×3 total=None, APLEONA×2 pendiente confirmación)
+
+**Pendientes irresolubles en este sprint (manual):**
+- GMAIL/bordagran@gmail.com: 9 forwarded — proveedor no identificable sin PDF parse
+- BBVA: 2 justificantes bancarios — no son facturas fiscales
+- Radiokable/Velilla/GOR/DIPGRA: total=None — parsers pendientes sprint siguiente
+
 ## [2.5.0] - 2026-06-19
 
 ### Clasificacion multilingue

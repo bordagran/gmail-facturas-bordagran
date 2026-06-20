@@ -230,5 +230,45 @@
     "dominios_extra": [
       "canva.com"
     ]
+  },
+  {
+    "nombre": "Textilolius",
+    "emails": [
+      "textilolius@textilolius.com"
+    ],
+    "matchType": "exact",
+    "dominio": "textilolius.com",
+    "activo": true,
+    "_nota": "FIX 11 v3.1.0: distintor de Textil Olius/Patricia (textil-olius.es)"
+  },
+  {
+    "nombre": "Tiendanimal",
+    "emails": [
+      "no-reply.store@tiendanimal.es"
+    ],
+    "matchType": "exact",
+    "dominio": "tiendanimal.es",
+    "activo": true,
+    "_nota": "FIX 11 v3.1.0"
+  },
+  {
+    "nombre": "VIVADTF",
+    "emails": [
+      "pedidos@vivadtf.com"
+    ],
+    "matchType": "exact",
+    "dominio": "vivadtf.com",
+    "activo": true,
+    "_nota": "FIX 11 v3.1.0"
+  },
+  {
+    "nombre": "Vinilos y Serigrafia",
+    "emails": [
+      "info@vinilosyserigrafia.com"
+    ],
+    "matchType": "exact",
+    "dominio": "vinilosyserigrafia.com",
+    "activo": true,
+    "_nota": "FIX 11 v3.1.0"
   }
 ]

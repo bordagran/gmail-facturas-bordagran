@@ -11,7 +11,7 @@ description: >
   y cada día a las 20:00 (resumen diario).
 ---
 
-# Skill: gmail-facturas-bordagran v3.0.1
+# Skill: gmail-facturas-bordagran v3.1.0  [BORRADOR — pendiente dry-run post-fixes]
 
 ## Reglas de oro (no negociables)
 
@@ -223,7 +223,8 @@ Genera `runtime/duplicados_detectados.csv` con grupos de filas posiblemente dupl
 | Velilla | num_factura real requerido | 21% ES | Sin num -> PENDIENTE |
 | VIVADTF | num_factura real requerido | 21% ES | myParcel = invalido |
 | DIPGRA | patrones generales ES | 21% ES | |
-
+
+
 
 ## Reglas operativas v3.0.1 (añadidas 2026-06-20)
 
@@ -262,3 +263,51 @@ python scripts\resumen.py --periodo trimestral --skill-dir .
 - Documentos fiscales: 9 | Base: 585.71 EUR | IVA: 123.00 EUR | Total: 771.18 EUR
 - SOLS x4 (708.71) | Canva x3 (36.00) | Anthropic x2 (26.47)
 - Tag: v3.0.1 | Commit: 11a132a
+
+---
+
+## Reglas operativas del agente en cowork (no negociables)
+
+### Validación obligatoria antes de cualquier cambio
+1. `python -m py_compile scripts/procesar_facturas.py scripts/resumen.py scripts/detectar_duplicados_sheet.py`
+2. `python scripts/procesar_facturas.py --modo incremental --desde YYYY-MM-DD --hasta YYYY-MM-DD --skill-dir . --dry-run --forzar`
+3. Verificar que py_compile pasa sin errores y dry-run termina con `Errores: 0`.
+
+### Qué NUNCA hacer en modo automático
+| Acción | Motivo |
+|---|---|
+| Registrar proveedor "GMAIL" genérico | Proveedor no identificado — L-037 |
+| Registrar documentos BBVA como factura | Son justificantes bancarios, no facturas fiscales — L-038 |
+| Registrar sin num_factura salvo REF_TECNICA validada | Riesgo de duplicados y errores fiscales — L-036 |
+| Ejecutar modo real sin dry-run previo | Protocolo obligatorio — L-032 |
+| Hacer commit sin aprobación de Juan | Cualquier versión |
+
+### Proveedores en PROVEEDORES_REF_TECNICA (v3.1.0)
+Proveedores que pueden registrarse con referencia técnica cuando total>0 y num_factura no extraíble:
+`canva`, `anthropic`, `workteam`, `mayton`, `tiendanimal`, `textilolius`, `textil olius`, `vivadtf`, `velilla`
+
+**Excluidos**: BBVA, GMAIL genérico, Radiokable (total=None), GOR Factory (total=None).
+
+### Anthropic: invoice + receipt del mismo cargo = 1 gasto (L-035)
+- Invoice PDF (`invoice_*.pdf`) → se registra normalmente.
+- Receipt PDF (`receipt_*.pdf`) del MISMO email → se omite si la invoice ya fue
+  registrada o detectada como duplicada en la misma ejecución.
+- Anthropic SÍ es proveedor válido. La recarga API es gasto fiscal real.
+
+### THCLOTHES: facturas RITI siempre en estado Revisar (L-033)
+- IVA 0% intracomunitario PT→ES → revisión fiscal obligatoria por el gestor.
+- El sistema las marca `Revisar` y nunca las suma al total deducible automáticamente.
+
+### Si el sandbox Linux no puede eliminar el lock NTFS (L-039)
+Pedir a Juan que ejecute desde PowerShell Windows:
+```powershell
+del C:\ClaudeProyectos\Bordagran\gmail-facturas-bordagran\runtime\procesar_facturas.lock
+```
+
+### En modo cowork: ejecutar, no solo proponer
+Si el agente tiene acceso a terminal/bash:
+- **Debe** ejecutar py_compile, dry-run y filtros él mismo.
+- **Debe** devolver resultados ya procesados (antes/después, nuevos registros, pendientes).
+- **No** debe limitarse a mostrar comandos y pedir a Juan que los ejecute,
+  salvo que la operación requiera Windows (lock NTFS, ejecución real, commit).
+

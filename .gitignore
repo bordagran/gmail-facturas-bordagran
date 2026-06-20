@@ -35,4 +35,5 @@ build/
 Thumbs.db
 scripts/*.bak
 runtime/diagnostico_*.txt
+runtime/dryrun_*.txt
 runtime/duplicados_*.csv

@@ -392,3 +392,147 @@ Solo suman estados `Registrada` o `Validada Carlos` (L-012).
 1. `python scripts\detectar_duplicados_sheet.py --skill-dir .` → debe decir "0 duplicados"
 2. `python scripts\resumen.py --periodo trimestral --skill-dir .` → verificar cifras coherentes
 3. No repetir ejecución real del mismo rango si ya fue validado
+
+## L-033 | THCLOTHES RITI / IVA 0%: siempre estado Revisar
+
+**Problema**: Facturas THCLOTHES (Portugal → España) tienen IVA 0% por régimen RITI
+(inversión del sujeto pasivo intracomunitario). El código las marcaba como "Registrada"
+antes de la revisión fiscal del gestor.
+
+**Regla**: Si `datos_pdf["iva_pct"] == 0` Y las notas contienen "RITI", "IVA 0pct",
+"exencion" o "intracomunit" → `determinar_estado()` devuelve siempre `Revisar`.
+No se registran como deducibles hasta que Carlos las valide.
+
+**Aplica en**: `determinar_estado()` — antes del `return ESTADOS["REGISTRADA"]` final.
+
+## L-034 | Fechas: normalizar a ISO en todos los puntos de comparación
+
+**Problema**: `anti_dup.es_duplicado()` Capa 6 compara prov+fecha+total. Si la fecha
+en el Sheet está en formato "Jun 13, 2026" y la del PDF sale como "2026-06-13", la Capa 6
+no detecta el duplicado y la factura se registra dos veces.
+
+**Regla**: Normalizar a ISO `YYYY-MM-DD` en CUATRO puntos:
+1. `_cargar()` — al leer filas del Sheet en memoria al inicio.
+2. `es_duplicado()` caller — antes de pasar `fecha=` al anti-dup.
+3. `registrar()` — al añadir al set intra-ejecución.
+4. `escribir_fila()` — al escribir columna A en el Sheet.
+
+**Formatos soportados**: ISO directo, "Month DD YYYY" EN, "DD Month YYYY", "DD/MM/YYYY",
+"Fri, DD Month YYYY" (con día de semana prefijado).
+
+**Aplica en**: todos los parsers de proveedores; especialmente crítico para Anthropic
+(fecha "June 13, 2026") y SOLS (fecha "13/06/2026").
+
+## L-035 | Anthropic invoice + receipt del mismo cargo cuentan una sola vez
+
+**Problema**: Anthropic envía en el mismo email una factura (`invoice_*.pdf`) y un
+recibo (`receipt_*.pdf`). Ambos tienen el mismo importe. Sin filtro, el recibo se
+insertaba como segunda fila en el Sheet aunque la factura ya estuviese registrada
+o detectada como duplicada.
+
+**Regla**: Flag `_anthropic_invoice_en_msg` por mensaje Gmail.
+- Se activa si en el mismo `msg_id` se registra O se detecta como duplicada una
+  invoice Anthropic (`tipo_doc` in factura / factura_digital / factura_recibo_digital).
+- Si el flag está activo y aparece un `factura_recibo_digital` Anthropic → se descarta
+  con motivo "Anthropic receipt omitido: invoice asociada ya registrada/duplicada en mismo email".
+
+**No aplica** a otros proveedores. Solo a Anthropic por su patrón email conocido.
+
+**Aplica en**: `_ejecutar()` — inicializar flag antes del loop de attachments por mensaje,
+activar en caso duplicate/registro exitoso, comprobar antes del upload a Drive.
+
+## L-036 | REF_TECNICA para proveedores sin num_factura legible: criterios de seguridad
+
+**Problema**: Muchos proveedores españoles emiten facturas en PDF donde pdfplumber no
+puede extraer el número de factura (diseño escaneado, campo en imagen, formato no
+estándar). Sin num_factura, el sistema bloquea la inserción como PENDIENTE_EXTRACCION.
+
+**Solución**: `PROVEEDORES_REF_TECNICA` — lista de proveedores de confianza que reciben
+una referencia técnica estable `PROVCODE_FECHA_TOTAL_HASH8` cuando:
+  1. `_sin_num == True` (num_factura no extraíble)
+  2. `tiene_total == True` (total > 0 sí extraído)
+  3. Proveedor en `PROVEEDORES_REF_TECNICA`
+
+**Criterios para incluir un proveedor**:
+- Proveedor real conocido (en `proveedores.json` o con email verificado)
+- Total se extrae correctamente en el dry-run
+- Riesgo fiscal bajo (proveedor recurrente, importes coherentes con el negocio)
+- NO es banco, NO es proveedor ambiguo, NO es GMAIL genérico
+
+**No incluir nunca**: BBVA, bancos, GMAIL genérico, proveedores con total=None.
+
+**Aplica en**: `_ejecutar()` — bloque REF_TECNICA tras comprobar `_pendiente_extraccion`.
+
+## L-037 | GMAIL genérico no debe registrarse automáticamente como factura fiscal
+
+**Problema**: Algunos PDFs llegan de remitentes genéricos de Gmail (p.ej. facturas
+remitidas por forwarding o generadas por herramientas) y el sistema no puede identificar
+al proveedor real. Registrarlos como "GMAIL" contamina el registro fiscal.
+
+**Regla**: Si el proveedor no se identifica (`es_desconocido=True` o `nombre=="GMAIL"`),
+el sistema debe:
+  1. Registrar como PENDIENTE con motivo `proveedor_no_identificado`.
+  2. NO insertar fila en el Sheet.
+  3. Etiquetar en Gmail con label `bordagran-pendiente` (solo en modo real).
+  4. Reportar en el resumen para revisión manual.
+
+**Excepciones**: Solo se puede procesar un GMAIL si, al abrir el PDF, el proveedor
+real es identificable de forma inequívoca por nombre+CIF+dirección. Eso requiere
+parser específico, no automatización genérica.
+
+## L-038 | BBVA no debe automatizarse como factura fiscal
+
+**Problema**: BBVA envía por email justificantes bancarios, resúmenes de cuenta,
+avisos de cargo y confirmaciones de transferencia. Ninguno de estos documentos es
+una factura fiscal deducible. Automatizarlos como factura insertaría gastos incorrectos.
+
+**Regla**: BBVA no debe incluirse en `PROVEEDORES_REF_TECNICA` ni en ningún path
+que produzca inserción automática en el Sheet fiscal.
+Los documentos BBVA quedan siempre como PENDIENTE para revisión manual.
+Si en el futuro BBVA emite una factura real de comisiones, debe validarse caso por caso.
+
+## L-039 | Lock NTFS: el sandbox Linux no puede eliminar locks creados en Windows
+
+**Problema**: El archivo `runtime/procesar_facturas.lock` se crea desde Windows.
+El sandbox Linux del agente (mount NTFS) puede leer su `stat` pero no puede hacer
+`unlink()` ni `write_text()` sobre él. El flag `--forzar` falla con
+`PermissionError: [Errno 1] Operation not permitted`.
+
+**Síntoma**: El script imprime "DRY-RUN: SI" y "Skill dir: ." pero no llega a
+procesar nada — crashea en `lock.liberar()` antes de `_ejecutar()`.
+
+**Solución**: Juan debe eliminar el lock desde PowerShell Windows:
+```powershell
+del C:\ClaudeProyectos\Bordagran\gmail-facturas-bordagran\runtime\procesar_facturas.lock
+```
+Después el agente puede volver a lanzar el dry-run sin `--forzar`.
+
+**Aplica en**: cualquier sesión cowork donde el agente lanza el script desde Linux
+y una ejecución anterior lo dejó con lock activo.
+
+## L-040 | PowerShell Windows cp1252: logging debe ser encoding-safe
+
+**Problema**: PowerShell en Windows usa codepage cp1252 por defecto. Los símbolos
+Unicode que no existen en cp1252 (→, ❌, ⚠️, ✅, ─) generan `UnicodeEncodeError`
+al hacer `print()`, rompiendo el script antes de completar el dry-run.
+
+**Error observado**:
+```
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2192'
+  line 1745: log(f"  → Duplicado: {motivo_dup}")
+```
+
+**Solución**:
+1. `configurar_salida_segura()`: llama `sys.stdout.reconfigure(encoding='utf-8', errors='replace')`
+   al inicio de `main()`. Esto hace que stdout use UTF-8 con reemplazo en lugar de cp1252.
+2. `log()` blindada con `try/except UnicodeEncodeError`: fallback a ASCII con `encode('ascii','replace')`.
+3. `print()` directos con emoji reemplazados por etiquetas ASCII: `❌` → `[ERROR]`, `⚠️` → `[WARN]`,
+   `→` → `>`.
+
+**Regla**: cualquier script ejecutable en Windows (procesar_facturas.py, resumen.py,
+detectar_duplicados_sheet.py) debe tener salida segura. Los símbolos visuales no pueden
+hacer crashear un dry-run o ejecución real.
+
+**Aplica en**: `configurar_salida_segura()` + `log()` en `procesar_facturas.py`.
+Considerar aplicar también a `resumen.py` y `detectar_duplicados_sheet.py`.
+
