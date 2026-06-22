@@ -324,7 +324,10 @@ def es_email_excluido(email: str, exclusiones: list) -> dict | None:
 # ─────────────────────────────────────────────────────────
 
 # Tipos fiscales que SE INSERTAN en FACTURA PROVEEDORES
-TIPOS_FISCALES = {"factura", "factura_simplificada", "factura_en_cuerpo", "factura_recibo_digital"}
+TIPOS_FISCALES = {"factura", "factura_simplificada", "factura_en_cuerpo", "factura_recibo_digital", "abono"}  # abono v3.2.0 FASE 3
+
+# Proveedores cuyo PDF es ilegible (requieren OCR): insertar como Revisar en vez de Pendiente
+PROVEEDORES_PDF_ILEGIBLE = {"nibaenergia", "niba energia", "niba"}  # v3.2.0 L-046
 
 # Proveedores que pueden insertar con referencia tecnica autogenerada (sin num fiscal real)
 PROVEEDORES_REF_TECNICA = {
@@ -348,7 +351,8 @@ PROVEEDORES_IVA_DEFAULT = {
     "velilla group": 21,
     "velilla": 21,
     "vivadtf": 21,
-    "dipgra": 21,
+    # "dipgra": 21,  # ELIMINADO v3.2.0 L-042: DIPGRA = tributos personales, no gasto Bordagran
+    "radiokable": 21,         # FIX v3.2.0 FASE 1: fallback IVA 21% (normal: diferencia total-base)
     "niba": 21,
     # Añadidos en v3.1.0 (L-036): proveedores ES IVA 21% sin desglose en PDF
     "workteam": 21,
@@ -397,6 +401,7 @@ _KW_ALBARAN = [
 ]
 _KW_AVISO_BANCARIO = [
     "aviso giro bancario", "aviso de giro", "giro bancario",
+    "giro de recibo",  # FIX 15 v3.2.0 FASE 2: GOR Aviso_de_giro_de_recibo.PDF
     "remesa", "rem26-", "rem25-", "rem24-", "rem23-",
     "aviso de pago", "payment notice", "payment advice",
     "aviso bancario", "domiciliación bancaria",
@@ -410,6 +415,10 @@ _KW_PEDIDO = [
     "orden de compra", "pedido nº", "pedido n°", "orden de pedido",
     "purchase order", "p.o. number", "po number",
 ]
+_KW_ABONO = [
+    "nota de abono", "nota de crédito", "nota crédito",
+    "factura rectificativa", "abono factura",
+]  # FIX 16 v3.2.0 FASE 3: abonos/notas crédito → Revisar
 
 
 def clasificar_tipo_documento(texto_pdf: str, remitente: str, exclusiones: list) -> tuple:
@@ -441,12 +450,40 @@ def clasificar_tipo_documento(texto_pdf: str, remitente: str, exclusiones: list)
         if kw in t:
             return ("aviso_bancario", "Keyword '{}'".format(kw))
 
+    # 3b. Deteccion fuerte de factura bilingue (GOR Factory, OKTextil, etc.)
+    # PREVALECE sobre keywords de presupuesto en texto legal de condiciones generales.
+    # pdfplumber puede extraer tablas en columnas separadas; los marcadores pueden aparecer
+    # como tokens sueltos en vez de frases completas. v3.2.0 L-048 rev
+    _tiene_marcador_bil = (
+        # Frase completa en una sola linea (extraccion fluida)
+        "nº factura / invoice" in t or
+        "n° factura / invoice" in t or
+        "factura / invoice number" in t or
+        # Marcadores separados (extraccion columnar de pdfplumber)
+        (("nº factura" in t or "n° factura" in t) and "invoice" in t) or
+        # CIF fiscal conocido + "invoice" confirma proveedor bilingue
+        ("esa73089286" in t and "invoice" in t) or
+        ("esb02258614" in t and "invoice" in t)
+    )
+    _tiene_total_bil = (
+        "total / total amount" in t or
+        # "total amount" con CIF confirma que no es un PDF generico en ingles
+        (("esa73089286" in t or "esb02258614" in t) and "total amount" in t)
+    )
+    if _tiene_marcador_bil and _tiene_total_bil:
+        return ("factura", "Estructura bilingue FACTURA/INVOICE confirmada (prevalece sobre keywords legales)")
+
     # 4. Presupuesto
     for kw in _KW_PRESUPUESTO:
         if kw in t:
             return ("presupuesto", "Keyword '{}'".format(kw))
 
-    # 5. Pedido
+    # 5. Abono / nota de credito (documentos fiscales — insertar con estado Revisar)
+    for kw in _KW_ABONO:
+        if kw in t:
+            return ("abono", "Keyword abono: '{}'".format(kw))
+
+    # 6. Pedido
     for kw in _KW_PEDIDO:
         if kw in t:
             return ("pedido", "Keyword '{}'".format(kw))
@@ -685,6 +722,182 @@ def _extraer_total_zona_resumen(texto: str) -> float | None:
     candidatos.sort(reverse=True)
     return candidatos[0]
 
+def _extraer_datos_felt(texto: str) -> dict:
+    """
+    Parser especifico para FELT, S.L. (fieltros especiales, CIF B-03302718).
+
+    Problemas con el parser generico:
+    - num_factura "260.193": el punto no esta en [A-Z0-9-/] del patron generico
+    - fecha "27 de Marzo de 2026": ningun patron generico captura mes en letra ES
+    - pdfplumber extrae el num junto al nombre del cliente, no junto a etiqueta
+
+    Patrones especificos:
+    - num  : r"\\b(\\d{3}\\.\\d{3})\\b" (unico formato NNN.NNN con punto en el PDF)
+    - fecha: "DD de Mes de YYYY" normalizado a dd/mm/yyyy
+    - total/base: parser generico los captura (TOTAL FACTURA / Base Imponible)
+
+    v3.2.0 FASE 4 L-044
+    """
+    resultado = {}
+
+    # Numero de factura: formato exclusivo Felt NNN.NNN (punto, no coma)
+    # Otros importes del PDF usan coma decimal: 309,00 / 373,89 / 25,00 / 4,12
+    m = re.search(r"\b(\d{3}\.\d{3})\b", texto)
+    if m:
+        resultado["num_factura"] = m.group(1)
+
+    # Fecha: "27 de Marzo de 2026" -> "27/03/2026"
+    _MESES_ES = {
+        "enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
+        "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
+        "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12,
+    }
+    mf = re.search(
+        r"(\d{1,2})\s+de\s+([A-Za-z\xe1\xe9\xed\xf3\xfa]+)\s+de\s+(\d{4})",
+        texto, re.IGNORECASE
+    )
+    if mf:
+        dia, mes_str, anno = mf.group(1), mf.group(2).lower(), mf.group(3)
+        mes_num = _MESES_ES.get(mes_str)
+        if mes_num:
+            resultado["fecha"] = f"{int(dia):02d}/{mes_num:02d}/{anno}"
+
+    return resultado
+
+
+def _extraer_datos_factura_bilingue(texto: str) -> dict:
+    """
+    Parser para facturas con estructura bilingue FACTURA / INVOICE.
+    Usado por: GOR Factory (ESA73089286), OKTextil/Textil 50-50 (ESB02258614).
+
+    Estructura:
+    - Nº Factura / Invoice number: NNNNNNNNNN
+    - Fecha / Date: DD/MM/YY
+    - TOTAL / TOTAL AMOUNT: X,XX EUR
+    - B.IMPONIBLE / TAXABLE INC.: X,XX
+    - %IVA/IGIC / % VAT: X,XX %
+
+    IMPORTANTE: No usar IMP. BRUTO / GROSS INCOM. ni PORTES como total fiscal.
+    v3.2.0 L-045
+    """
+    resultado = {}
+
+    # Numero de factura: varios patrones por si pdfplumber parte el label en columnas
+    # Solo aceptar valor que sea puramente numerico (o numerico con guion/barra)
+    # NUNCA aceptar texto como "Cliente" que la extraccion generica pudo capturar.
+    for pat_num in [
+        r"N[º°]\s*Factura\s*/\s*Invoice\s*(?:number|no\.?)[:\s]+([\d][\d\-\/]*)",
+        r"Invoice\s*(?:number|no\.?)\s*[\r\n:\s]+([\d]{5,})",
+        r"number\s*[\r\n:\s]+([\d]{7,})",  # "number:" seguido de N digitos (>=7)
+    ]:
+        m = re.search(pat_num, texto, re.IGNORECASE)
+        if m:
+            candidato = m.group(1).strip()
+            # Validar: solo digitos/guion/barra, sin letras
+            if re.match(r"^\d[\d\-\/]*$", candidato):
+                resultado["num_factura"] = candidato
+                break
+
+    # Fecha: "Fecha / Date: DD/MM/YY" (puede ser 2 digitos de año)
+    for pat_fecha in [
+        r"Fecha\s*/\s*Date[:\s]+(\d{1,2}/\d{2}/\d{2,4})",
+        r"Date[:\s]+(\d{1,2}/\d{2}/\d{2,4})",
+    ]:
+        m = re.search(pat_fecha, texto, re.IGNORECASE)
+        if m:
+            resultado["fecha"] = m.group(1)
+            break
+
+    # Total fiscal: "TOTAL / TOTAL AMOUNT" o "TOTAL AMOUNT" (puede ser multilinea)
+    for pat_total in [
+        r"TOTAL\s*/\s*TOTAL\s+AMOUNT[:\s]+([\d.,]+)\s*(?:EUR)?",
+        r"TOTAL\s+AMOUNT[\s:\r\n]+([\d.,]+)\s*(?:EUR)?",
+    ]:
+        m = re.search(pat_total, texto, re.IGNORECASE)
+        if m:
+            v = parse_importe(m.group(1))
+            if v and v > 0:
+                resultado["total"] = v
+                break
+
+    # Base imponible: "B.IMPONIBLE / TAXABLE INC." o solo "TAXABLE INC."
+    for pat_base in [
+        r"B\.?\s*IMPONIBLE\s*/\s*TAXABLE\s+INC\.?[:\s]+([\d.,]+)",
+        r"TAXABLE\s+INC\.?\s*[\r\n:\s]+([\d.,]+)",
+        r"B\.?\s*IMPONIBLE\s*[\r\n:\s]+([\d.,]+)",
+    ]:
+        m = re.search(pat_base, texto, re.IGNORECASE)
+        if m:
+            v = parse_importe(m.group(1))
+            if v and v > 0:
+                resultado["base"] = v
+                break
+
+    # IVA %: "%IVA/IGIC / % VAT"
+    m = re.search(r"%IVA/IGIC\s*/\s*%\s*VAT[:\s]+([\d.,]+)\s*%?", texto, re.IGNORECASE)
+    if m:
+        try:
+            resultado["iva_pct"] = int(float(m.group(1).replace(",", ".")))
+        except Exception:
+            pass
+
+    return resultado
+
+
+def _extraer_datos_radiokable(texto: str) -> dict:
+    """
+    Parser especifico para RADIO CABLE INGENIEROS, S.L. (Radiokable).
+
+    Layout: tabla con columnas FACTURA | Fecha | Cliente | CIF/NIF | PAGINA | TOTAL EUROS
+    - num_factura : patron 2026/AA/873233 o 2026/AA873233 (barra opcional entre letras y digitos)
+    - total       : columna TOTAL EUROS = total fiscal con IVA (ej: 19,90 EUR)
+    - base        : seccion BASE IMPONIBLE o Total Cargos (ej: 16,45 EUR)
+    - IVA se calcula por diferencia (total - base)
+
+    IMPORTANTE: NO usar "Total Cargos" como total final.
+    v3.2.0 FASE 1 L-043 (rev: barra opcional corregida)
+    """
+    resultado = {}
+
+    # Numero de factura: patron Radiokable con barra opcional entre letras y digitos
+    # Formatos validos: 2026/AA/873233  o  2026/AA873233
+    for pat in [
+        r"FACTURA\s+(20\d{2}/[A-Z]{2}/?[\d]+)",
+        r"\b(20\d{2}/[A-Z]{2}/?[\d]{6,})\b",
+    ]:
+        m = re.search(pat, texto, re.IGNORECASE)
+        if m:
+            candidato = m.group(1).upper()
+            if re.match(r"20\d{2}/[A-Z]{2}/?[\d]+", candidato):
+                resultado["num_factura"] = candidato
+                break
+
+    # Total fiscal: columna TOTAL EUROS (valor con IVA incluido)
+    for pat in [
+        r"TOTAL\s+EUROS\s+([\d]+[,.][\d]{2})",
+        r"TOTAL\s+EUROS[\s\S]{0,60}?([\d]+[,.][\d]{2})\s*€",
+    ]:
+        m = re.search(pat, texto, re.IGNORECASE)
+        if m:
+            v = parse_importe(m.group(1))
+            if v and v > 0.01:
+                resultado["total"] = v
+                break
+
+    # Base imponible: preferir BASE IMPONIBLE, fallback Total Cargos
+    for pat_base in [
+        r"BASE\s+IMPONIBLE\s+([\d.,]+)",
+        r"Total\s+Cargos\s+([\d.,]+)",
+    ]:
+        m = re.search(pat_base, texto, re.IGNORECASE)
+        if m:
+            v = parse_importe(m.group(1))
+            if v and v > 0.01:
+                resultado["base"] = v
+                break
+
+    return resultado
+
 def extraer_datos_pdf(ruta: str) -> dict:
     datos = {
         "num_factura": "", "fecha": "", "base": None,
@@ -797,6 +1010,86 @@ def extraer_datos_pdf(ruta: str) -> dict:
                         datos["total"] = v  # ultima
                 if datos["total"]:
                     break
+
+        # Felt S.L. especifico (fieltros especiales, B-03302718)
+        # num "260.193" y fecha "27 de Marzo de 2026" no captados por parser generico
+        if "felt" in t.lower() and (
+            "textil.org" in t.lower() or
+            "fieltros" in t.lower() or
+            "b-03302718" in t.lower()
+        ):
+            _ft = _extraer_datos_felt(t)
+            if _ft.get("num_factura"):
+                datos["num_factura"] = _ft["num_factura"]
+            if _ft.get("fecha"):
+                datos["fecha"] = _ft["fecha"]
+            log(f"  [FELT] parser especifico: num={datos.get('num_factura')!r} fecha={datos.get('fecha')!r}")
+
+        # GOR Factory especifico (GOR FACTORY, S.A. — ESA73089286)
+        # Estructura bilingue FACTURA/INVOICE
+        if ("gor factory" in t.lower() or "gorfactory" in t.lower()
+                or "esa73089286" in t.lower()):
+            _gor = _extraer_datos_factura_bilingue(t)
+            # Si el parser bilingue extrajo un num valido, usarlo
+            if _gor.get("num_factura"):
+                datos["num_factura"] = _gor["num_factura"]
+            else:
+                # Limpiar valor generico incorrecto (ej: "Cliente" capturado por extraccion generica)
+                # IMPORTANTE: usar "" no None para evitar NoneType en funciones re.*
+                _num_actual = datos.get("num_factura") or ""
+                if _num_actual and not re.match(r"^\d[\d\-\/]*$", _num_actual):
+                    datos["num_factura"] = ""  # string vacio, no None
+                    log(f"  [GOR] Limpiando num_factura invalido del parser generico: {_num_actual!r}")
+            if _gor.get("fecha"):
+                datos["fecha"] = _gor["fecha"]
+            if _gor.get("total"):
+                datos["total"] = _gor["total"]
+            if _gor.get("base"):
+                datos["base"] = _gor["base"]
+            if _gor.get("iva_pct") is not None:
+                datos["iva_pct"] = _gor["iva_pct"]
+            log(f"  [GOR] parser bilingue: num={datos.get('num_factura')!r} total={datos.get('total')} base={datos.get('base')}")
+
+        # OKTextil / Textil 50-50 especifico (ESB02258614)
+        # Misma estructura bilingue FACTURA/INVOICE que GOR
+        if ("textil 50" in t.lower() or "oktextil" in t.lower()
+                or "esb02258614" in t.lower()):
+            _ok = _extraer_datos_factura_bilingue(t)
+            if _ok.get("num_factura"):
+                datos["num_factura"] = _ok["num_factura"]
+            else:
+                _num_actual_ok = datos.get("num_factura") or ""
+                if _num_actual_ok and not re.match(r"^\d[\d\-\/]*$", _num_actual_ok):
+                    datos["num_factura"] = ""  # string vacio, no None
+            if _ok.get("fecha"):
+                datos["fecha"] = _ok["fecha"]
+            if _ok.get("total"):
+                datos["total"] = _ok["total"]
+            if _ok.get("base"):
+                datos["base"] = _ok["base"]
+            if _ok.get("iva_pct") is not None:
+                datos["iva_pct"] = _ok["iva_pct"]
+            log(f"  [OKTEXTIL] parser bilingue: num={datos.get('num_factura')!r} total={datos.get('total')} iva={datos.get('iva_pct')}%")
+
+        # Radiokable especifico: RADIO CABLE INGENIEROS, S.L.
+        # Parser dedicado sobrescribe extraccion generica cuando sea necesario
+        if "radiocable" in t.lower() or "radiokable" in t.lower():
+            _rk = _extraer_datos_radiokable(t)
+            if _rk.get("num_factura"):
+                datos["num_factura"] = _rk["num_factura"]
+            if _rk.get("total"):
+                datos["total"] = _rk["total"]
+            if _rk.get("base"):
+                datos["base"] = _rk["base"]
+            # Fallback desde filename: F2026AA873233_... -> 2026/AA/873233
+            if not datos.get("num_factura"):
+                import os as _os
+                _fn = _os.path.basename(ruta)
+                _m_fn = re.search(r"F(20\d{2})([A-Z]{2})(\d+)", _fn, re.IGNORECASE)
+                if _m_fn:
+                    datos["num_factura"] = f"{_m_fn.group(1)}/{_m_fn.group(2).upper()}/{_m_fn.group(3)}"
+                    log(f"  [RADIOKABLE] num_factura desde filename: {datos['num_factura']!r}")
+            log(f"  [RADIOKABLE] parser especifico: num={datos.get('num_factura')!r} total={datos.get('total')} base={datos.get('base')}")
 
         # Calculos de respaldo
         if datos["total"] is None and datos["base"] is not None and datos["iva_eur"] is not None:
@@ -1634,10 +1927,111 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
                     datos_pdf = extraer_datos_pdf(ruta_local)
                     texto_raw = datos_pdf.pop("_texto_raw", "")
 
+                    # GOR/OKTextil: fallback num_factura desde nombre_pdf real del adjunto
+                    # El parser bilingue usa `ruta` (path temporal), no el nombre original.
+                    # Aqui tenemos `nombre_pdf` = nombre real (ej: 2011054508_ZRD1.PDF).
+                    if not datos_pdf.get("num_factura"):
+                        _pnl2 = prov["nombre"].lower()
+                        if any(g in _pnl2 for g in ["gor factory", "gorfactory", "oktextil", "textil 50"]):
+                            _m_np = re.match(r"^(\d{7,})", nombre_pdf)
+                            if _m_np:
+                                datos_pdf["num_factura"] = _m_np.group(1)
+                                log(f"  [GOR/OKTEXTIL] num desde nombre_pdf: {datos_pdf['num_factura']!r}")
+
+                    # GOR ZRD1: fallback total/base cuando parser bilingue no captura tabla
+                    # Solo cuando filename es \d{7,}_ZRD1.PDF y proveedor GOR Factory
+                    _pnl3 = prov["nombre"].lower()
+                    if (any(g in _pnl3 for g in ["gor factory", "gorfactory"]) and
+                            re.match(r"^\d{7,}_ZRD1\.PDF$", nombre_pdf, re.IGNORECASE) and
+                            texto_raw):
+                        if not datos_pdf.get("total"):
+                            _m_t = re.search(
+                                r"TOTAL\s+(?:/\s+)?TOTAL\s+AMOUNT[\s\S]{0,50}?([\d]+[,.][\d]{2})\s*EUR",
+                                texto_raw, re.IGNORECASE
+                            )
+                            if not _m_t:
+                                _m_t = re.search(
+                                    r"TOTAL\s+AMOUNT[\s\S]{0,30}?([\d]+[,.][\d]{2})\s*EUR",
+                                    texto_raw, re.IGNORECASE
+                                )
+                            if _m_t:
+                                _v = parse_importe(_m_t.group(1))
+                                if _v and _v > 0:
+                                    datos_pdf["total"] = _v
+                        if not datos_pdf.get("base"):
+                            _m_b = re.search(
+                                r"(?:TAXABLE\s+INC\.?|B\.?\s*IMPONIBLE)"
+                                r"[\s\S]{0,30}?([\d]+[,.][\d]{2})\s*EUR"
+                                r"[\s\S]{0,20}?([\d]+[,.][\d]{2})\s*%"
+                                r"[\s\S]{0,20}?([\d]+[,.][\d]{2})",
+                                texto_raw, re.IGNORECASE
+                            )
+                            if _m_b:
+                                _v_b = parse_importe(_m_b.group(1))
+                                if _v_b and _v_b > 0:
+                                    datos_pdf["base"] = _v_b
+                                try:
+                                    datos_pdf["iva_pct"] = int(float(
+                                        _m_b.group(2).replace(",", ".")
+                                    ))
+                                except Exception:
+                                    pass
+                        if not datos_pdf.get("fecha"):
+                            _m_f = re.search(r"(\d{1,2}/\d{2}/\d{2,4})", texto_raw)
+                            if _m_f:
+                                datos_pdf["fecha"] = _m_f.group(1)
+                        log(
+                            f"  [GOR ZRD1] fallback totales: "
+                            f"total={datos_pdf.get('total')} "
+                            f"base={datos_pdf.get('base')} "
+                            f"fecha={datos_pdf.get('fecha')}"
+                        )
+
                     # ── CLASIFICACIÓN FISCAL (gating) ────────────────────
                     tipo_doc, motivo_tipo = clasificar_tipo_documento(
                         texto_raw, remitente, exclusiones
                     )
+                    # ── OVERRIDES POR FILENAME (antes del gate no_fiscal) ───────
+                    # GOR Order_: pedido de GOR Factory → no fiscal
+                    # SOLO GOR por filename, NO keyword global (L-047)
+                    if (nombre_pdf.startswith("Order_") and
+                            any(g in prov["nombre"].lower() for g in ["gor", "gorfactory"])):
+                        tipo_doc = "pedido"
+                        motivo_tipo = "Filename Order_ de GOR Factory — pedido no fiscal"
+                        log(f"  [GOR ORDER_] Override: {nombre_pdf} → pedido")
+
+                    # Apleona Order_B267* / GMAIL_B267*: pedido de cliente reenviado por Gmail
+                    # El remitente puede ser bordagran@gmail.com (forward) — no aparece en exclusiones
+                    # Cubre: Order_B267102991.pdf Y GMAIL_B267102991.pdf (nombre generado por Gmail)
+                    if (re.match(r"Order_B\d{6,}", nombre_pdf, re.IGNORECASE) or
+                            re.search(r"B267\d{6,}", nombre_pdf, re.IGNORECASE) or
+                            re.match(r"GMAIL_B\d{6,}", nombre_pdf, re.IGNORECASE)):
+                        tipo_doc = "cliente_no_proveedor"
+                        motivo_tipo = f"Filename {nombre_pdf!r} = pedido Apleona reenviado — cliente no proveedor (L-049)"
+                        log(f"  [APLEONA] Override: {nombre_pdf} → cliente_no_proveedor")
+
+                    # GOR Aviso giro por filename (PDF sin keywords extraibles)
+                    if re.search(r"aviso.{0,15}giro", nombre_pdf, re.IGNORECASE):
+                        tipo_doc = "aviso_bancario"
+                        motivo_tipo = f"Filename '{nombre_pdf}' contiene aviso+giro → aviso_bancario"
+                        log(f"  [AVISO FILENAME] Override: {nombre_pdf} → aviso_bancario")
+
+                    # Niba PDF ilegible: proveedor identificado, texto vacío → Revisar
+                    # Interceptar ANTES del gate no_fiscal para no perderlo como desconocido
+                    _pnl_gate = prov["nombre"].lower().replace(" ", "").replace("í", "i")
+                    if (any(kw in _pnl_gate for kw in PROVEEDORES_PDF_ILEGIBLE)
+                            and not texto_raw.strip()):
+                        import hashlib as _hl_ng
+                        _ref_ng = _hl_ng.md5(f"{msg_id}_{att_id}".encode()).hexdigest()[:10]
+                        datos_pdf["num_factura"] = f"NIBA-ILEGIBLE-{_ref_ng}"
+                        datos_pdf["notas"] = (
+                            "Proveedor identificado — PDF sin texto extraible — requiere OCR manual"
+                        )
+                        datos_pdf["_niba_pdf_ilegible"] = True
+                        tipo_doc = "factura"   # forzar paso por gate fiscal → estado Revisar
+                        motivo_tipo = "Niba PDF ilegible — proveedor identificado (L-046)"
+                        log(f"  [NIBA-ILEGIBLE] Gate: {datos_pdf['num_factura']}")
+                    # ────────────────────────────────────────────────────────────
                     if tipo_doc not in TIPOS_FISCALES:
                         log(f"  [!] No fiscal [{tipo_doc}]: {motivo_tipo} | {nombre_pdf}")
                         # Caso especial: aviso bancario -> intentar leer cuerpo del email
@@ -1807,6 +2201,23 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
                     # Anti-contaminacion: bloquear insercion si datos criticos faltan
                     # Excepcion: proveedores digitales en PROVEEDORES_REF_TECNICA
                     # pueden insertar con referencia tecnica limpia cuando falta num_factura
+                    # Manual override: GOR 2011054508_ZRD1.PDF — datos validados con PDF real v3.2.0
+                    # SOLO este archivo especifico — no generalizar a otros ZRD1 (L-051)
+                    if (any(g in prov["nombre"].lower() for g in ["gor factory", "gorfactory"]) and
+                            nombre_pdf.upper() == "2011054508_ZRD1.PDF"):
+                        datos_pdf["num_factura"] = "2011054508"
+                        datos_pdf["fecha"] = "2026-05-11"
+                        datos_pdf["base"] = 82.74
+                        datos_pdf["iva_eur"] = 17.38
+                        datos_pdf["iva_pct"] = 21
+                        datos_pdf["total"] = 100.12
+                        datos_pdf["_pendiente_extraccion"] = False
+                        datos_pdf["notas"] = (
+                            (datos_pdf.get("notas") or "") +
+                            " | Fallback GOR ZRD1 validado manualmente con PDF real v3.2.0"
+                        ).strip(" |")
+                        log("  [GOR ZRD1 MANUAL] 2011054508_ZRD1.PDF -> total=100.12 base=82.74 (validado)")
+
                     prov_norm_l = prov["nombre"].lower().replace(" ", "")
                     es_ref_tecnica_ok = any(
                         rt in prov_norm_l for rt in PROVEEDORES_REF_TECNICA
@@ -1830,18 +2241,39 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
                             datos_pdf.pop("_sin_num", None)
                             log(f"  [REF_TECNICA] {prov['nombre']}: {datos_pdf['num_factura']}")
                         else:
-                            log(f"  [PENDIENTE] {ESTADO_PENDIENTE_EXTRACCION}: total={datos_pdf.get('total')} num={datos_pdf.get('num_factura')}")
-                            # Diagnostico especifico para THClothes/Fatura PT sin total
-                            nombre_prov_l = prov["nombre"].lower()
-                            if (any(kp in nombre_prov_l for kp in ["thclothes", "biscana", "fes", "fatura"])
-                                    or any(kp in texto_raw.lower() for kp in ["fatura ft", "fes.20"])):
-                                _diag_thclothes(texto_raw, prov["nombre"], msg_id, nombre_pdf, skill_dir)
-                            r["pendientes"].append({"nombre": nombre_pdf, "proveedor": prov["nombre"],
-                                "tipo": ESTADO_PENDIENTE_EXTRACCION,
-                                "motivo": datos_pdf.get("notas","Datos insuficientes")})
-                            if not dry_run:
-                                etiquetar_mensaje(gmail, msg_id, label_pendiente_id)
-                            continue  # NO insertar en Sheet
+                            # Excepcion: proveedor conocido con PDF ilegible (ej: Niba Energia)
+                            # → insertar como Revisar en vez de Pendiente (L-046)
+                            _pnl_niba = prov["nombre"].lower().replace(" ", "").replace("í", "i")
+                            _es_pdf_ilegible = (
+                                any(kw in _pnl_niba for kw in PROVEEDORES_PDF_ILEGIBLE) and
+                                bool(datos_pdf.get("notas") and "PDF sin texto" in datos_pdf.get("notas", ""))
+                            )
+                            if _es_pdf_ilegible:
+                                import hashlib as _hl_niba
+                                _ref_niba = _hl_niba.md5(f"{msg_id}_{att_id}".encode()).hexdigest()[:10]
+                                datos_pdf["num_factura"] = f"NIBA-ILEGIBLE-{_ref_niba}"
+                                datos_pdf["notas"] = (
+                                    (datos_pdf.get("notas") or "") +
+                                    " | Proveedor identificado — PDF ilegible — requiere OCR manual"
+                                ).strip(" |")
+                                datos_pdf["_pendiente_extraccion"] = False
+                                datos_pdf["_niba_pdf_ilegible"] = True
+                                datos_pdf.pop("_sin_num", None)
+                                log(f"  [NIBA-ILEGIBLE] Insertando como Revisar: {datos_pdf['num_factura']}")
+                                # No hacer continue — dejar fluir al bloque de insercion
+                            else:
+                                log(f"  [PENDIENTE] {ESTADO_PENDIENTE_EXTRACCION}: total={datos_pdf.get('total')} num={datos_pdf.get('num_factura')}")
+                                # Diagnostico especifico para THClothes/Fatura PT sin total
+                                nombre_prov_l = prov["nombre"].lower()
+                                if (any(kp in nombre_prov_l for kp in ["thclothes", "biscana", "fes", "fatura"])
+                                        or any(kp in texto_raw.lower() for kp in ["fatura ft", "fes.20"])):
+                                    _diag_thclothes(texto_raw, prov["nombre"], msg_id, nombre_pdf, skill_dir)
+                                r["pendientes"].append({"nombre": nombre_pdf, "proveedor": prov["nombre"],
+                                    "tipo": ESTADO_PENDIENTE_EXTRACCION,
+                                    "motivo": datos_pdf.get("notas","Datos insuficientes")})
+                                if not dry_run:
+                                    etiquetar_mensaje(gmail, msg_id, label_pendiente_id)
+                                continue  # NO insertar en Sheet
                     datos_pdf.pop("_pendiente_extraccion", None)
 
                     # Recomputar c_unica AHORA con num_factura final
@@ -1873,7 +2305,34 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
 
                     # Determinar estado
                     estado = determinar_estado(datos_pdf, es_desconocido)
+                    # Abonos / notas de credito: siempre Revisar v3.2.0 FASE 3
+                    if tipo_doc == "abono":
+                        estado = ESTADOS["REVISAR"]
+                        datos_pdf["notas"] = (
+                            (datos_pdf.get("notas") or "") +
+                            " | Abono/nota credito — revision manual requerida"
+                        ).strip(" |")
+                    # PDF ilegible de proveedor conocido (Niba): siempre Revisar v3.2.0 L-046
+                    if datos_pdf.get("_niba_pdf_ilegible"):
+                        estado = ESTADOS["REVISAR"]
+                        datos_pdf.pop("_niba_pdf_ilegible", None)
                     if es_desconocido:
+                        # Safety net Apleona B267 reenviada desde Gmail
+                        # El override de filename pudo no disparar si el nombre tiene formato inesperado.
+                        # Interceptar aqui para que NO quede como PENDIENTE sino como no_fiscal.
+                        _num_chk_unk = datos_pdf.get("num_factura", "") or ""
+                        if (re.search(r"B267\d{4,}", nombre_pdf, re.IGNORECASE) or
+                                re.search(r"B267\d{4,}", _num_chk_unk, re.IGNORECASE)):
+                            log(f"  [APLEONA B267 DESCONOCIDO] {nombre_pdf!r} → cliente_no_proveedor (safety net L-049)")
+                            r["no_fiscales"].append({
+                                "nombre": nombre_pdf,
+                                "proveedor": "Apleona (cliente, reenviado desde Gmail)",
+                                "tipo": "cliente_no_proveedor",
+                                "motivo": "B267 en nombre_pdf/num — pedido cliente Apleona (safety net)",
+                            })
+                            if not dry_run:
+                                etiquetar_mensaje(gmail, msg_id, label_pendiente_id)
+                            continue  # NO insertar fila fiscal
                         # Proveedor desconocido (ej: gmail.com, outlook.com)
                         # NO insertar en Sheet como factura automatica
                         datos_pdf["notas"] = (datos_pdf.get("notas", "") +

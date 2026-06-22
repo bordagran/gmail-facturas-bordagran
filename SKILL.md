@@ -11,7 +11,7 @@ description: >
   y cada día a las 20:00 (resumen diario).
 ---
 
-# Skill: gmail-facturas-bordagran v3.1.0  [BORRADOR — pendiente dry-run post-fixes]
+# Skill: gmail-facturas-bordagran v3.2.0  [VALIDADO — dry-run 2026-06-22]
 
 ## Reglas de oro (no negociables)
 
@@ -195,6 +195,60 @@ El modo dry-run simula todo el procesamiento (clasifica, detecta dups, parsea) s
 
 ```bash
 python scripts/detectar_duplicados_sheet.py --skill-dir .
+```
+
+---
+
+## Proveedores activos v3.2.0 — reglas y casos especiales
+
+### GOR Factory (`invoices@gorfactory.es`, `administracion@gorfactory.es`, `c76@gorfactory.es`)
+- `invoices@` y `administracion@` = facturas reales (insertar).
+- `c76@` = contacto comercial / confirmaciones de pedido (no insertar automaticamente).
+- `Order_*.pdf` → `tipo_doc = "pedido"` (no fiscal). Override por filename SOLO para GOR. No keyword global.
+- `Aviso_de_giro*.pdf` → `tipo_doc = "aviso_bancario"` (no fiscal). Override por filename.
+- PDFs con estructura bilingue FACTURA/INVOICE: `_extraer_datos_factura_bilingue()`. CIF marcador: `ESA73089286`.
+- Boilerplate legal en pagina 2 puede contener "presupuesto" — no es el tipo del documento (L-048).
+- Sufijo `_ZRD1` en filename: codigo interno de GOR, sin significado fiscal para Bordagran.
+- `2011054508_ZRD1.PDF`: fallback manual validado con PDF real (L-051). No generalizar.
+
+### OKTextil / Textil 50-50 (`firma-e@oktextil.com`, `roly@oktextil.com`)
+- CIF B-02258614 (ESB02258614). Estructura bilingue FACTURA/INVOICE identica a GOR.
+- IVA 0% intracomunitario → estado siempre `Revisar` (L-045).
+
+### Radiokable (`facturas@radiokable.net`, `radiokable@radiokable.net`)
+- Numero de factura: formato `2026/AA/NNNNNN` (slash entre letras y digitos opcional).
+- Parser: `_extraer_datos_radiokable()`. SIEMPRE desde PDF adjunto, no cuerpo email (L-043).
+
+### Felt S.L. (`felt@textil.org`)
+- Numero formato `260.193`. Fechas en espanol ("01 mayo 2026"). Parser: `_extraer_datos_felt()`.
+
+### Niba Energia (`clientes@facturas.nibaenergia.es`)
+- PDFs sin texto extraible (cifrados/escaneados). `PROVEEDORES_PDF_ILEGIBLE`.
+- Si `texto_raw == ""` → `num = "NIBA-ILEGIBLE-{hash10}"`, estado `Revisar`. NUNCA inventar datos (L-046).
+
+### Apleona (`compras.es-fm@apleona.com` + reenviados desde Gmail)
+- CLIENTE de Bordagran, nunca proveedor. En `exclusiones.json`.
+- PDFs reenviados desde Gmail con `B267\d{6,}` en filename → `cliente_no_proveedor` (L-041, L-049).
+
+### DIPGRA (`info_tributos@dipgra.es`, `no_responder.tributos@dipgra.es`)
+- Administracion publica. Tributos/tramites no imputables. En `exclusiones.json`. NUNCA automatizar (L-042).
+
+### BBVA (`notificaciones-bbva@bbva.com`)
+- Entidad bancaria. Justificantes/movimientos no son facturas. En `exclusiones.json` (L-050).
+
+---
+
+## Resultado validado Q2 2026 (dry-run 2026-06-22, rama dev/v3.2.0)
+
+```
+Habria registrado : 21
+Duplicados        : 15
+No fiscales       : 89
+Pendientes        : 11
+Errores           : 0
+Rango             : 2026-04-01 → 2026-06-20
+Proveedores       : 32 cargados
+Exclusiones       : 5 cargadas
 ```
 
 Genera `runtime/duplicados_detectados.csv` con grupos de filas posiblemente duplicadas (NO borra nada).

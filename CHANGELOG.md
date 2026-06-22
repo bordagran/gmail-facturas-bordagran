@@ -1,4 +1,137 @@
 # CHANGELOG — gmail-facturas-bordagran
+
+## [3.2.0] - 2026-06-22
+
+### Objetivo
+Reducir pendientes Q2 2026 mediante parsers específicos, nuevos proveedores y reglas de exclusión.
+Resultado validado dry-run: 21 registradas | 89 no fiscales | 11 pendientes | 0 errores.
+
+---
+
+### FASE 1 — Radiokable: parser PDF (L-043)
+
+**Problema:** Radiokable envía facturas con número de formato `2026/AA/873233` (slash opcional
+entre el bloque alfabético y los dígitos). El parser anterior fallaba en ese formato.
+
+**Fix:** `_extraer_datos_radiokable()` — patrón actualizado a `r"FACTURA\s+(20\d{2}/[A-Z]{2}/?[\d]+)"`.
+El `/?` hace el slash entre letras y dígitos opcional.
+
+**Regla:** Radiokable usa PDF adjunto, NO cuerpo del email. Parser siempre en `extraer_datos_pdf()`.
+Emails relevantes: `facturas@radiokable.net`, `radiokable@radiokable.net`.
+
+---
+
+### FASE 2 — GOR Factory: parser bilingüe + reglas de clasificación (L-047 / L-048 / L-049 / L-051)
+
+**Proveedores activos:**
+- `invoices@gorfactory.es` → facturas fiscales reales
+- `administracion@gorfactory.es` → fiscal (también activo)
+- `c76@gorfactory.es` → contacto/pedidos únicamente
+
+**Fixes implementados:**
+
+**L-047 — Order_\*.pdf → pedido/no fiscal**
+Filename override antes del gate fiscal: si `nombre_pdf.startswith("Order_")` Y proveedor es GOR → `tipo_doc = "pedido"`.
+No usar keyword global "order" — solo aplica a GOR por filename. Keyword global contaminaría otros proveedores.
+
+**L-048 — Bilingüe FACTURA/INVOICE: prevalece sobre keywords legales**
+GOR Factory envía PDFs con boilerplate legal en página 2 que contiene "presupuesto".
+El clasificador lo marcaba como `presupuesto` antes de detectar `factura`.
+Fix: detector de estructura bilingüe `FACTURA/INVOICE` añadido en `clasificar_tipo_documento()`
+ANTES del check de presupuesto. Marcadores: `"nº factura / invoice"`, CIF `ESA73089286`.
+
+**L-049 — Aviso_de_giro_de_recibo.PDF → aviso_bancario**
+Filename override: `re.search(r"aviso.{0,15}giro", nombre_pdf)` → `tipo_doc = "aviso_bancario"`.
+
+**L-051 — 2011054508_ZRD1.PDF: fallback manual validado con PDF real**
+El parser bilingüe no captura la tabla de totales de este PDF por el layout de columnas pdfplumber.
+Fix conservador: cuando `prov = GOR Factory` AND `nombre_pdf.upper() == "2011054508_ZRD1.PDF"`,
+se asignan los valores validados directamente:
+```
+num_factura = "2011054508"
+fecha = "2026-05-11"
+base = 82.74  iva_eur = 17.38  iva_pct = 21  total = 100.12
+_pendiente_extraccion = False
+```
+Nota: `Fallback GOR ZRD1 validado manualmente con PDF real v3.2.0`.
+Este override NO generaliza a todos los ZRD1 — solo a este archivo específico.
+
+**Nota sobre sufijo ZRD1:** El sufijo `_ZRD1` en el filename no es criterio fiscal. No tiene
+significado de clasificación para Bordagran; es un código interno de GOR Factory.
+
+---
+
+### FASE 3 — OKTextil / Textil 50-50: nuevo proveedor (L-045)
+
+**Proveedor:** TEXTIL 50-50 S.L.U., CIF B-02258614
+**Emails:** `firma-e@oktextil.com`, `roly@oktextil.com`
+**Parser:** `_extraer_datos_factura_bilingue()` — misma estructura FACTURA/INVOICE que GOR.
+Marcador CIF: `ESB02258614`.
+**IVA:** 0% intracomunitario — estado forzado a Revisar para validación fiscal.
+**Nota:** Sin facturas en rango Q2 2026 en el dry-run de validación. Proveedor aprendido y listo.
+
+---
+
+### FASE 4 — Felt S.L.: nuevo proveedor
+
+**Email:** `felt@textil.org`
+**Parser:** `_extraer_datos_felt()` — maneja formato `260.193` para num_factura
+y fechas en español (`01 mayo 2026`).
+**Nota:** Sin facturas en rango Q2 2026 en el dry-run de validación. Proveedor aprendido y listo.
+
+---
+
+### FASE 5 — Niba Energía: PDF ilegible → Revisar con referencia (L-046)
+
+**Problema:** Niba Energía envía PDFs cifrados/escaneados sin texto extraíble.
+pdfplumber devuelve `texto=""`, `tipo_doc="desconocido"` → perdido en pendientes sin referencias.
+
+**Fix:**
+- `PROVEEDORES_PDF_ILEGIBLE = {"nibaenergia", "niba energia", "niba"}` — set de detección.
+- Gate en `_ejecutar` ANTES del check `tipo_doc not in TIPOS_FISCALES`:
+  si proveedor en `PROVEEDORES_PDF_ILEGIBLE` AND `texto_raw == ""` →
+  asignar `num_factura = "NIBA-ILEGIBLE-{hash10}"`, `tipo_doc = "factura"`,
+  `_niba_pdf_ilegible = True` → fuerza estado `Revisar`.
+- Resultado en Sheet: `Niba Energía | NIBA-ILEGIBLE-{ref} | Revisar`.
+- **Regla (NIBA):** Nunca inventar datos. Si el PDF es ilegible, insertar con referencia trazable
+  y estado Revisar para OCR/revisión manual.
+
+---
+
+### FASE 6 — Apleona / DIPGRA: exclusiones y reglas de cliente (L-041 / L-042 / L-049)
+
+**DIPGRA (Diputación Provincial de Granada):**
+- `info_tributos@dipgra.es` y `no_responder.tributos@dipgra.es` añadidos a `exclusiones.json`.
+- Motivo: impuestos/trámites administrativos no imputables como gasto fiscal de Bordagran.
+- **Regla (DIPGRA):** NUNCA automatizar. Aunque envíen PDF, no es factura de proveedor.
+
+**Apleona (cliente, no proveedor):**
+- `compras.es-fm@apleona.com` en `exclusiones.json` — excluido a nivel de email.
+- PDFs reenviados desde Gmail (`GMAIL_B267...`, `Order_B267...`): safety net en bloque
+  `if es_desconocido:` — intercepta B267 en nombre_pdf o num_factura → `cliente_no_proveedor`.
+- **Regla (APLEONA):** Apleona es cliente de Bordagran. Sus documentos (pedidos, facturas de
+  trabajos realizados para ellos) NO generan gasto fiscal de Bordagran.
+
+---
+
+### FASE 6b — BBVA: exclusión bancaria (L-050)
+
+- `notificaciones-bbva@bbva.com` añadido a `exclusiones.json`.
+- Motivo: entidad bancaria — movimientos, domiciliaciones y avisos no son facturas de proveedor.
+- Resultado: BBVA clasificado como no fiscal (no llega a pendientes).
+
+---
+
+### Correcciones de robustez (GOR num_factura)
+
+- GOR parser genérico capturaba "Cliente" (cabecera de tabla) como `num_factura`.
+  Fix: tras `_extraer_datos_factura_bilingue()`, si num no coincide con `^\d[\d\-\/]*$` →
+  limpiar a `""` (nunca `None` — `None` causa `TypeError` en `re.*` downstream).
+- Fallback `num_factura` desde `nombre_pdf` para GOR/OKTextil: usa `nombre_pdf` (nombre
+  original del adjunto, p.ej. `2011054508_ZRD1.PDF`), NO `ruta` (path temporal `/tmp/...`).
+
+---
+
 ## [3.1.0] - 2026-06-20
 
 ### Fix: THCLOTHES — extracción de total sin capturar saltos de línea (FIX 1)

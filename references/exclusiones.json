@@ -4,5 +4,28 @@
     "motivo": "Cliente / no proveedor",
     "accion": "no_insertar_facturas",
     "notas": "ARQUS-ALLIANCE es cliente de Bordagran, no proveedor. Sus emails no generan filas en FACTURA PROVEEDORES."
+  },
+  {
+    "email": "compras.es-fm@apleona.com",
+    "motivo": "Cliente / no proveedor",
+    "accion": "no_insertar_facturas",
+    "notas": "APLEONA es cliente de Bordagran, no proveedor. Sus documentos (Order_, presupuestos, etc.) no generan gasto fiscal de Bordagran. v3.2.0 L-041."
+  },
+  {
+    "email": "info_tributos@dipgra.es",
+    "motivo": "No proveedor - impuesto/tramite no imputable a Bordagran",
+    "accion": "no_insertar_facturas",
+    "notas": "DIPGRA (Diputacion Provincial de Granada) envia documentos de tributos/impuestos personales o tramites administrativos no imputables como gasto fiscal de Bordagran. v3.2.0 L-042."
+  },
+  {
+    "email": "no_responder.tributos@dipgra.es",
+    "motivo": "No proveedor - impuesto/tramite no imputable a Bordagran",
+    "accion": "no_insertar_facturas",
+    "notas": "DIPGRA segundo remitente (no_responder.tributos). Misma exclusion que info_tributos@dipgra.es. v3.2.0 L-042."
+  },  {
+    "email": "notificaciones-bbva@bbva.com",
+    "motivo": "Entidad bancaria \u2014 justificantes/movimientos no son facturas de proveedor",
+    "accion": "no_insertar_facturas",
+    "notas": "BBVA envia notificaciones bancarias (movimientos, domiciliaciones, avisos). Nunca factura fiscal de proveedor. v3.2.0 L-050."
   }
 ]
