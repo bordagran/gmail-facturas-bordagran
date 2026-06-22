@@ -2,10 +2,12 @@
   {
     "nombre": "Velilla Group",
     "emails": [
-      "no-reply@velilla-group.com"
+      "no-reply@velilla-group.com",
+      "atencioncliente@velilla-group.com"
     ],
     "matchType": "exact",
-    "activo": true
+    "activo": true,
+    "_nota": "v3.2.0 FASE 3: añadido atencioncliente@velilla-group.com (abonos/devoluciones)"
   },
   {
     "nombre": "Niba Energia",
@@ -26,18 +28,34 @@
   {
     "nombre": "Radiokable",
     "emails": [
-      "facturas@radiokable.net"
+      "facturas@radiokable.net",
+      "radiokable@radiokable.net"
     ],
     "matchType": "exact",
-    "activo": true
+    "activo": true,
+    "_nota": "v3.2.0 FASE 1 L-043: añadido radiokable@radiokable.net (email visible en PDF)"
   },
   {
     "nombre": "GOR Factory",
     "emails": [
-      "administracion@gorfactory.es"
+      "administracion@gorfactory.es",
+      "invoices@gorfactory.es",
+      "c76@gorfactory.es"
     ],
     "matchType": "exact",
-    "activo": true
+    "activo": true,
+    "_nota": "v3.2.0 L-047: invoices@gorfactory.es = facturas reales; c76@gorfactory.es = contacto/pedidos; Order_*.pdf → pedido/no_fiscal"
+  },
+  {
+    "nombre": "OKTextil / Textil 50-50",
+    "emails": [
+      "firma-e@oktextil.com",
+      "roly@oktextil.com"
+    ],
+    "dominio": "oktextil.com",
+    "matchType": "exact",
+    "activo": true,
+    "_nota": "v3.2.0 L-045: TEXTIL 50-50 S.L.U., CIF B-02258614, estructura bilingue FACTURA/INVOICE, IVA 0% intracomunitario → Revisar"
   },
   {
     "nombre": "SOLS",

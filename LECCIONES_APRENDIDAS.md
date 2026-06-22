@@ -536,3 +536,196 @@ hacer crashear un dry-run o ejecución real.
 **Aplica en**: `configurar_salida_segura()` + `log()` en `procesar_facturas.py`.
 Considerar aplicar también a `resumen.py` y `detectar_duplicados_sheet.py`.
 
+---
+
+## L-041 | Apleona es cliente de Bordagran — nunca proveedor (v3.2.0)
+
+**Fecha**: 2026-06-22
+
+**Problema**: Emails de `compras.es-fm@apleona.com` y PDFs reenviados desde Gmail
+(`GMAIL_B267...`, `Order_B267...`) llegaban al pipeline y se registraban como facturas
+de proveedor o quedaban como pendientes.
+
+**Contexto**: Apleona es cliente de Bordagran — le compra bordados/DTF. Sus documentos
+son pedidos que Bordagran debe ejecutar, no facturas de gasto de Bordagran.
+
+**Corrección**:
+1. `compras.es-fm@apleona.com` a `exclusiones.json` con `accion: no_insertar_facturas`.
+2. Filename override: `Order_B267*` / `GMAIL_B267*` / `B267\d{6,}` en nombre_pdf a `tipo_doc = "cliente_no_proveedor"`.
+3. Safety net en bloque `if es_desconocido:` — si B267 en nombre_pdf o num_factura: `no_fiscales`, no pendientes.
+
+**Regla operativa permanente**:
+> APLEONA = cliente de Bordagran. Sus documentos nunca generan gasto fiscal de Bordagran.
+> No automatizar. No insertar. Clasificar siempre como `cliente_no_proveedor`.
+
+---
+
+## L-042 | DIPGRA no es proveedor ni gasto automatizable (v3.2.0)
+
+**Fecha**: 2026-06-22
+
+**Problema**: `info_tributos@dipgra.es` y `no_responder.tributos@dipgra.es`
+(Diputacion Provincial de Granada) enviaban documentos de tributos/tramites que el
+pipeline intentaba procesar como facturas.
+
+**Corrección**: Ambos emails en `exclusiones.json`.
+
+**Regla operativa permanente**:
+> DIPGRA = administracion publica. Sus documentos (tributos, notificaciones, expedientes)
+> NO son facturas de proveedor deducibles de Bordagran. NUNCA automatizar.
+
+---
+
+## L-043 | Radiokable: parser PDF, slash opcional en num_factura (v3.2.0)
+
+**Fecha**: 2026-06-22
+
+**Problema**: Radiokable usa numero `2026/AA/873233` — el slash entre `AA` y los digitos
+es opcional segun el PDF. El patron anterior fallaba cuando no estaba presente.
+
+**Corrección**: Patron actualizado a `r"FACTURA\s+(20\d{2}/[A-Z]{2}/?[\d]+)"` — `/?` hace el slash opcional.
+
+**Reglas**:
+1. Radiokable usa SIEMPRE PDF adjunto. No buscar en cuerpo del email.
+2. Emails validos: `facturas@radiokable.net`, `radiokable@radiokable.net`.
+
+---
+
+## L-044 | Correcciones de clasificacion fiscal: documentar siempre en LECCIONES_APRENDIDAS (v3.2.0)
+
+**Fecha**: 2026-06-22
+
+**Problema recurrente**: Cada sprint descubre clasificaciones incorrectas. Sin documentacion,
+los mismos errores reaparecen en sprints futuros o al refactorizar.
+
+**Regla operativa permanente**:
+> Cuando Juan o el gestor fiscal corrijan una clasificacion erronea (tipo_doc incorrecto,
+> proveedor mal identificado, importe mal extraido), documentar INMEDIATAMENTE:
+> — clasificacion incorrecta anterior
+> — clasificacion correcta
+> — contexto fiscal que lo justifica
+> — cambio de codigo que lo arregla
+>
+> Esto evita repetir el mismo error en sprints futuros.
+
+---
+
+## L-045 | OKTextil / Textil 50-50: proveedor intracomunitario, IVA 0%, estado Revisar (v3.2.0)
+
+**Fecha**: 2026-06-22
+
+**Proveedor**: TEXTIL 50-50 S.L.U., CIF B-02258614. Emails: `firma-e@oktextil.com` / `roly@oktextil.com`.
+
+**Caracteristicas**:
+- Estructura bilingue FACTURA/INVOICE (mismo formato que GOR Factory). CIF marcador: `ESB02258614`.
+- IVA 0% intracomunitario — estado forzado a `Revisar` para validacion fiscal.
+
+**Regla**: OKTextil NUNCA debe registrarse como `Registrada` automaticamente. Siempre `Revisar`.
+
+---
+
+## L-046 | Niba Energia: PDF ilegible — insertar como Revisar, nunca inventar datos (v3.2.0)
+
+**Fecha**: 2026-06-22
+
+**Problema**: Niba Energia envía PDFs sin texto extraible por pdfplumber (cifrados/escaneados).
+El sistema los clasificaba como `desconocido` y los perdia en pendientes sin referencia.
+
+**Corrección**:
+- `PROVEEDORES_PDF_ILEGIBLE = {"nibaenergia", "niba energia", "niba"}`.
+- Gate antes del clasificador fiscal: si proveedor en lista Y `texto_raw == ""` -->
+  `num_factura = "NIBA-ILEGIBLE-{hash10}"`, `tipo_doc = "factura"`, `_niba_pdf_ilegible = True`, estado `Revisar`.
+
+**Regla operativa permanente**:
+> Si el PDF de Niba es ilegible: NO inventar datos. Insertar con referencia NIBA-ILEGIBLE-{hash}
+> y estado Revisar. El hash garantiza trazabilidad. Revision manual requerida (OCR o consulta a Niba).
+
+---
+
+## L-047 | GOR Factory: separar remitentes de facturas vs. contacto/pedidos (v3.2.0)
+
+**Fecha**: 2026-06-22
+
+**Emails GOR Factory**:
+- `invoices@gorfactory.es` / `administracion@gorfactory.es` -> facturas reales (insertar)
+- `c76@gorfactory.es` -> contacto comercial y confirmaciones de pedido (no insertar automaticamente)
+
+**Regla para Order_\*.pdf de GOR**:
+> Si `nombre_pdf.startswith("Order_")` Y proveedor = GOR Factory -> `tipo_doc = "pedido"` (no fiscal).
+> NO aplicar keyword global "order" -- solo override por filename para GOR.
+> El sufijo `_ZRD1` no tiene significado fiscal para Bordagran.
+
+---
+
+## L-048 | GOR Factory PDF bilingue: boilerplate legal no es "presupuesto" (v3.2.0)
+
+**Fecha**: 2026-06-22
+
+**Problema**: Pagina 2 del PDF GOR contiene la palabra "presupuesto" en texto legal generico.
+El clasificador lo marcaba como `presupuesto` antes de detectar `factura`.
+
+**Corrección**: Detector de estructura bilingue FACTURA/INVOICE anadido en `clasificar_tipo_documento()`
+ANTES del check de presupuesto. Marcadores: `"no factura / invoice"`, CIF `ESA73089286`, `"total / total amount"`.
+
+**Regla**:
+> La deteccion de estructura bilingue FACTURA/INVOICE SIEMPRE tiene precedencia sobre keywords
+> de presupuesto/proforma. Un PDF con estructura INVOICE confirmada no puede ser presupuesto.
+
+---
+
+## L-049 | Apleona reenviada desde Gmail: la exclusion de email no basta (v3.2.0)
+
+**Fecha**: 2026-06-22
+
+**Problema**: Cuando un pedido de Apleona se reenvía a `bordagran@gmail.com`, el pipeline
+ve el remitente como Gmail, no como Apleona. La exclusion en `exclusiones.json` no aplica.
+
+**Síntoma**: PDFs `GMAIL_B267102991.pdf` aparecian como pendientes con proveedor "GMAIL".
+
+**Corrección en dos capas**:
+1. Filename override (antes del gate fiscal): `re.search(r"B267\d{6,}", nombre_pdf)` -> `cliente_no_proveedor`.
+2. Safety net (dentro de `if es_desconocido:`): intercepta cualquier B267 que escape al override.
+
+**Regla**:
+> Cuando un cliente reenvía sus propios pedidos a Gmail, el remitente visible es Gmail.
+> No basta excluir el email del cliente. Cubrir tambien el patron del contenido (filename, num_factura).
+
+---
+
+## L-050 | BBVA no es proveedor fiscal: exclusiones, no REF_TECNICA (v3.2.0)
+
+**Fecha**: 2026-06-22
+
+**Corrección**: `notificaciones-bbva@bbva.com` a `exclusiones.json`.
+Motivo: justificantes bancarios no son facturas deducibles.
+
+**Regla operativa permanente**:
+> BBVA y cualquier entidad bancaria NO pueden figurar en `PROVEEDORES_REF_TECNICA`.
+> Sus documentos no son facturas deducibles. Si en el futuro hay comision bancaria facturable,
+> validar manualmente caso por caso.
+
+---
+
+## L-051 | GOR ZRD1: cuando el parser falla, usar fallback manual validado (v3.2.0)
+
+**Fecha**: 2026-06-22
+
+**Problema**: `2011054508_ZRD1.PDF` de GOR Factory -- pdfplumber extrae el texto pero
+la tabla de totales tiene layout de columnas que los patrones regex no capturan. Resultado: `total=None`.
+
+**Datos verificados con PDF real**:
+```
+num = "2011054508" | fecha = "2026-05-11"
+base = 82.74 EUR | IVA = 17.38 EUR (21%) | total = 100.12 EUR
+```
+
+**Corrección**: Override especifico para `nombre_pdf.upper() == "2011054508_ZRD1.PDF"` con
+proveedor GOR Factory. Valores hardcodeados, validados manualmente. `_pendiente_extraccion = False`.
+
+**Principio general**:
+> Cuando un PDF de proveedor conocido no puede parsearse automaticamente:
+> (a) intentar fallback regex mas flexible;
+> (b) si sigue fallando, insertar los valores validados manualmente con nota explicita.
+> NUNCA dejar el gasto fuera del registro fiscal.
+> El fallback manual debe ser lo mas especifico posible: solo para ese filename exacto.
+
