@@ -1,5 +1,65 @@
 # CHANGELOG — gmail-facturas-bordagran
 
+## [3.3.0] - 2026-06-23 — BORRADOR (rama feature/v3.3.0-maestro-proveedores-dashboard)
+
+### Objetivo
+Centralizar criterios de proveedores en MAESTRO_PROVEEDORES y crear un dashboard
+fiscal HTML de solo lectura para visualizar el estado del trimestre.
+
+### Nuevos archivos
+
+**Documentacion:**
+- `docs/v3.3.0_maestro_proveedores_dashboard.md` — Especificacion completa v3.3.0
+- `docs/maestro_proveedores.md` — Diseno de la pestana MAESTRO_PROVEEDORES (columnas, valores, semilla)
+- `docs/dashboard_fiscal_html_readonly.md` — Especificacion del dashboard: solo lectura, funciones prohibidas, alertas
+
+**Semilla de datos:**
+- `references/maestro_proveedores_seed.json` — 15 proveedores pre-clasificados con criterios aprobados
+
+**Dashboard (Google Apps Script — solo lectura):**
+- `dashboard/README.md` — Instrucciones de despliegue
+- `dashboard/Code.gs` — Servidor GAS: lee FACTURA PROVEEDORES y MAESTRO_PROVEEDORES, calcula KPIs y alertas
+- `dashboard/Index.html` — HTML principal: filtros, KPIs, tablas, alertas semaforo
+- `dashboard/styles.html` — CSS responsive: tarjetas, tablas, badges de estado
+- `dashboard/scripts.html` — JS cliente: filtros, sort en memoria, render dinamico
+
+**Validacion:**
+- `scripts/verificar_dashboard_solo_lectura.py` — Escanea dashboard/ buscando funciones de escritura prohibidas
+
+### Diseno del MAESTRO_PROVEEDORES
+
+Pestana auxiliar en Google Sheets con 11 columnas:
+Proveedor detectado | Proveedor normalizado | Email/dominio | Categoria |
+Tipo fiscal | Estado por defecto | Proveedor seguro | Accion automatica |
+Primera deteccion | Ultima deteccion | Notas
+
+Logica para proveedores nuevos: alta automatica con estado "Nuevo / Pendiente clasificar"
+y accion "No registrar automatico" hasta revision manual de Juan.
+
+### Dashboard — Garantia de solo lectura
+
+Funciones prohibidas en todos los archivos:
+setValue, setValues, appendRow, clear, deleteRow, insertRow,
+protect, setNumberFormat, setBackground, setFont, setFormula
+
+Funciones prohibidas solo en archivos .gs (GAS servidor):
+sort, copyTo, remove, move, update
+
+Verificacion automatica: `python scripts/verificar_dashboard_solo_lectura.py`
+Resultado: OK - dashboard limpio de funciones de escritura
+
+### Estado de implementacion
+
+- [x] Fase A: Documentacion y diseno — COMPLETA
+- [x] Fase C: Dashboard HTML esqueleto — COMPLETA
+- [x] Fase D: Script verificador — COMPLETA
+- [ ] Fase B: Funciones auxiliares en procesar_facturas.py — PENDIENTE
+- [ ] Fase E: Resumen y revision Juan — PENDIENTE
+
+**RAMA NO MERGEADA. No ejecutar en modo real. No tocar main.**
+
+---
+
 ## [3.2.1] - 2026-06-23
 
 ### Objetivo

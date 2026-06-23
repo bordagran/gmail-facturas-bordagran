@@ -22,6 +22,7 @@ import re
 import sys
 import tempfile
 import time
+import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -107,6 +108,115 @@ def normalizar_texto(texto: str) -> str:
     if not texto:
         return ""
     return re.sub(r'\s+', '', texto).upper().strip()
+
+
+# ─────────────────────────────────────────────────────────
+# MAESTRO_PROVEEDORES v3.3.0
+# ─────────────────────────────────────────────────────────
+
+def normalizar_encabezado(texto: str) -> str:
+    """Sin acentos, minusculas, espacios simples. Robusto ante tildes."""
+    if not texto:
+        return ""
+    nfkd = unicodedata.normalize("NFKD", str(texto))
+    sin_acentos = "".join(c for c in nfkd if not unicodedata.combining(c))
+    return " ".join(sin_acentos.lower().split())
+
+
+def cargar_maestro_proveedores(ss) -> tuple:
+    """
+    Lee MAESTRO_PROVEEDORES (solo lectura: get_all_values).
+    Devuelve (dict, Worksheet|None).
+    Pestana inexistente => ({}, None) => v3.2.1 exacto.
+    Pestana vacia => ({}, ws) => v3.3.0 activo sin datos.
+    """
+    nombre = "MAESTRO_PROVEEDORES"
+    try:
+        ws = ss.worksheet(nombre)
+    except Exception:
+        log(f"[MAESTRO] Pestana '{nombre}' no encontrada - operando sin maestro (v3.2.1)")
+        return {}, None
+    try:
+        valores = ws.get_all_values()
+    except Exception as exc:
+        log(f"[MAESTRO] Error leyendo '{nombre}': {exc} - operando sin maestro", "WARNING")
+        return {}, None
+    if not valores:
+        log(f"[MAESTRO] Pestana '{nombre}' vacia - sheet_maestro disponible")
+        return {}, ws
+    encabezados = [normalizar_encabezado(h) for h in valores[0]]
+    maestro: dict = {}
+    for fila in valores[1:]:
+        if not any(c.strip() for c in fila):
+            continue
+        fd = {}
+        for idx, val in enumerate(fila):
+            if idx < len(encabezados):
+                fd[encabezados[idx]] = val.strip()
+        key = normalizar_texto(fd.get("proveedor detectado", ""))
+        if key:
+            maestro[key] = fd
+    log(f"[MAESTRO] {len(maestro)} proveedores cargados desde '{nombre}'")
+    return maestro, ws
+
+
+def buscar_en_maestro(maestro: dict, nombre: str):
+    """Busca proveedor por nombre. Devuelve dict|None. Nunca falla."""
+    if not maestro or not nombre:
+        return None
+    return maestro.get(normalizar_texto(nombre))
+
+
+def criterio_maestro(entrada) -> dict:
+    """
+    Traduce fila del Maestro a instruccion de estado.
+    None => logica v3.2.1 sin cambios.
+    """
+    if entrada is None:
+        return None
+    ev = entrada.get("estado validacion proveedor", "").strip().lower()
+    if ev == "excluido":
+        return {"accion": "excluir"}
+    if ev == "pendiente":
+        return {"accion": "revisar",
+                "motivo": "Proveedor pendiente de validacion en MAESTRO_PROVEEDORES"}
+    if ev == "revisar siempre":
+        return {"accion": "revisar",
+                "motivo": "Proveedor configurado como Revisar siempre en MAESTRO_PROVEEDORES"}
+    if ev == "validado":
+        if "revisar" in entrada.get("accion automatica", "").lower():
+            return {"accion": "revisar",
+                    "motivo": "Accion automatica: Registrar siempre como Revisar"}
+        return {"accion": "registrar_con_control"}
+    return None
+
+
+def registrar_proveedor_nuevo_en_maestro(
+        sheet_maestro, nombre: str, remitente: str,
+        fecha_hoy: str, dry_run: bool = False) -> None:
+    """
+    Aniade fila en MAESTRO_PROVEEDORES. Solo modo real.
+    NUNCA toca FACTURA PROVEEDORES. Fallo silencioso.
+    """
+    if dry_run:
+        log(f"  [DRY-RUN MAESTRO] Habria anadido: {nombre!r}")
+        return
+    if sheet_maestro is None:
+        log(f"  [MAESTRO] sheet_maestro=None, no se puede registrar: {nombre!r}", "WARNING")
+        return
+    fila = [
+        nombre, "", remitente,
+        "Pendiente", "Pendiente", "Revisar", "No",
+        "No registrar automatico",
+        "Pendiente", "", "", "",
+        fecha_hoy, fecha_hoy,
+        "Anadido automaticamente por procesar_facturas.py v3.3.0",
+    ]
+    try:
+        sheet_maestro.append_row(fila, value_input_option="USER_ENTERED")
+        log(f"  [MAESTRO] Proveedor nuevo registrado: {nombre!r}")
+    except Exception as exc:
+        log(f"  [MAESTRO] Error al registrar {nombre!r}: {exc}", "WARNING")
 
 
 def calcular_trimestre(fecha: datetime) -> str:
@@ -1166,7 +1276,16 @@ def extraer_datos_pdf(ruta: str) -> dict:
     return datos
 
 
-def determinar_estado(datos_pdf: dict, es_desconocido: bool) -> str:
+def determinar_estado(datos_pdf: dict, es_desconocido: bool, criterio: dict = None) -> str:
+    # BLOQUE v3.3.0: criterio del MAESTRO_PROVEEDORES
+    if criterio is not None:
+        accion = criterio.get("accion", "")
+        if accion in ("revisar", "pendiente", "excluir"):
+            return ESTADOS["REVISAR"]
+        # "registrar_con_control" => continua con logica fiscal v3.2.1
+    # FIN BLOQUE v3.3.0
+
+    # Logica v3.2.1 original INTACTA:
     if datos_pdf.get("notas") and "Error" in datos_pdf["notas"]:
         return ESTADOS["ERROR"]
     if es_desconocido:
@@ -1756,6 +1875,10 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
 
     verificar_headers(sheet)
 
+    # MAESTRO_PROVEEDORES v3.3.0 (degradacion silenciosa si no existe)
+    maestro_data, sheet_maestro = cargar_maestro_proveedores(ss)
+    fecha_hoy = datetime.now().strftime("%Y-%m-%d")
+
     # Label IDs
     label_procesadas_id = obtener_label_id(gmail, config["LABEL_PROCESADAS"])
     label_pendiente_id = obtener_label_id(gmail, config["LABEL_PENDIENTE"])
@@ -2333,8 +2456,47 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
                     if pdf_hash: _exec_hashes.add(pdf_hash)
                     if normalizar_texto(datos_pdf.get("num_factura","")): _exec_prov_num.add(_pn_key)
 
-                    # Determinar estado
-                    estado = determinar_estado(datos_pdf, es_desconocido)
+                    # MAESTRO_PROVEEDORES v3.3.0
+                    entrada_maestro = buscar_en_maestro(maestro_data, prov["nombre"])
+                    criterio        = criterio_maestro(entrada_maestro)
+                    accion_criterio = (criterio or {}).get("accion", "")
+
+                    es_proveedor_nuevo = (
+                        entrada_maestro is None
+                        and sheet_maestro is not None
+                        and not es_desconocido
+                    )
+
+                    if es_proveedor_nuevo:
+                        registrar_proveedor_nuevo_en_maestro(
+                            sheet_maestro, prov["nombre"],
+                            remitente, fecha_hoy, dry_run=dry_run,
+                        )
+                        estado = ESTADOS["REVISAR"]
+                        datos_pdf["notas"] = (
+                            (datos_pdf.get("notas") or "") +
+                            " | Proveedor nuevo pendiente de validacion en MAESTRO_PROVEEDORES"
+                        ).strip(" |")
+                        log(f"  [MAESTRO NUEVO] {prov['nombre']} -> Revisar (alta pendiente)")
+
+                    elif accion_criterio == "excluir":
+                        log(f"  [MAESTRO EXCLUIDO] {prov['nombre']} -> no insertar")
+                        r["no_fiscales"].append({
+                            "nombre": nombre_pdf,
+                            "motivo": f"Excluido en MAESTRO_PROVEEDORES: {prov['nombre']}",
+                        })
+                        if not dry_run:
+                            etiquetar_mensaje(gmail, msg_id, label_procesadas_id)
+                        continue
+
+                    else:
+                        estado = determinar_estado(datos_pdf, es_desconocido, criterio=criterio)
+                        if criterio and criterio.get("motivo"):
+                            datos_pdf["notas"] = (
+                                (datos_pdf.get("notas") or "") + " | " + criterio["motivo"]
+                            ).strip(" |")
+                    # FIN MAESTRO_PROVEEDORES v3.3.0
+
                     # Abonos / notas de credito: siempre Revisar v3.2.0 FASE 3
                     if tipo_doc == "abono":
                         estado = ESTADOS["REVISAR"]

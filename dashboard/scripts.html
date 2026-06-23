@@ -1,0 +1,422 @@
+<script>
+/**
+ * Dashboard Fiscal Bordagran — v3.3.0
+ * JavaScript del cliente — SOLO LECTURA.
+ * Ninguna función aquí modifica Google Sheets.
+ */
+
+// Estado de la app en memoria (no hay localStorage)
+var STATE = {
+  facturas:  [],  // filas originales de la hoja
+  headers:   [],  // encabezados de la hoja
+  resumen:   null,
+  filtros: {
+    trimestre: "",
+    mes:       "",
+    proveedor: "",
+    estado:    "",
+    busqueda:  ""
+  },
+  sortCol:  -1,
+  sortAsc:  true
+};
+
+// Índices de columnas (detectados dinámicamente)
+var IDX = {};
+
+// ─────────────────────────────────────────────────────────────
+// INICIALIZACIÓN
+// ─────────────────────────────────────────────────────────────
+
+window.addEventListener("load", function() {
+  cargarDatos();
+});
+
+function cargarDatos() {
+  mostrarLoading(true);
+  // Llamar a las dos funciones del servidor en paralelo
+  google.script.run
+    .withSuccessHandler(function(res) {
+      if (res.error) { mostrarError(res.error); return; }
+      STATE.headers  = res.headers;
+      STATE.facturas = res.rows;
+      buildIDX(res.headers);
+      populateFiltros();
+
+      // Ahora pedir el resumen
+      google.script.run
+        .withSuccessHandler(function(rsm) {
+          STATE.resumen = rsm;
+          renderTodo();
+          mostrarLoading(false);
+        })
+        .withFailureHandler(onError)
+        .getResumen();
+    })
+    .withFailureHandler(onError)
+    .getFacturas();
+}
+
+function buildIDX(headers) {
+  IDX = {};
+  headers.forEach(function(h, i) {
+    IDX[h.toUpperCase()] = i;
+  });
+}
+
+function onError(err) {
+  mostrarError(String(err));
+  mostrarLoading(false);
+}
+
+// ─────────────────────────────────────────────────────────────
+// RENDER PRINCIPAL
+// ─────────────────────────────────────────────────────────────
+
+function renderTodo() {
+  if (!STATE.resumen) return;
+  renderKPIs(STATE.resumen.kpis);
+  renderAlertas(STATE.resumen.alertas);
+  renderTablaFacturas(filteredRows());
+  renderResumenTrimestral(STATE.resumen.por_trimestre);
+  renderResumenProveedores(STATE.resumen.por_proveedor);
+  renderProveedoresNuevos(STATE.resumen.proveedores_nuevos);
+
+  if (STATE.resumen.maestro_warning) {
+    mostrarWarning(STATE.resumen.maestro_warning);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// KPIs
+// ─────────────────────────────────────────────────────────────
+
+function renderKPIs(kpis) {
+  var html = "";
+
+  html += kpiCard("Total facturas",  kpis.total_facturas,     "",          "azul");
+  html += kpiCard("Base imponible",  fmt€(kpis.suma_base),    "EUR",       "azul");
+  html += kpiCard("IVA soportado",   fmt€(kpis.suma_iva),     "EUR",       "azul");
+  html += kpiCard("Importe total",   fmt€(kpis.suma_total),   "EUR",       "azul");
+  html += kpiCard("Registradas",     kpis.count_registrada,   "facturas",  "verde");
+  html += kpiCard("En Revisar",      kpis.count_revisar,      "facturas",  kpis.count_revisar > 0 ? "amarillo" : "verde");
+  html += kpiCard("Validadas",       kpis.count_validada,     "por Carlos","verde");
+  html += kpiCard("Pendientes",      kpis.count_pendiente + kpis.count_error, "facturas", kpis.count_pendiente > 0 ? "rojo" : "verde");
+  html += kpiCard("Sin PDF",         kpis.sin_pdf,            "facturas",  kpis.sin_pdf > 0 ? "amarillo" : "verde");
+  html += kpiCard("IVA 0%",          kpis.iva_cero,           "facturas",  kpis.iva_cero > 0 ? "amarillo" : "verde");
+  html += kpiCard("Intracomunit.",   kpis.intracomunitario,   "facturas",  "amarillo");
+  html += kpiCard("Fechas sospech.", kpis.fecha_sospechosa,   "alertas",   kpis.fecha_sospechosa > 0 ? "rojo" : "verde");
+
+  document.getElementById("kpi-grid").innerHTML = html;
+}
+
+function kpiCard(label, valor, sub, tipo) {
+  return '<div class="kpi-card ' + tipo + '">' +
+    '<div class="kpi-label">' + esc(label) + '</div>' +
+    '<div class="kpi-valor">' + esc(String(valor)) + '</div>' +
+    (sub ? '<div class="kpi-sub">' + esc(sub) + '</div>' : '') +
+    '</div>';
+}
+
+// ─────────────────────────────────────────────────────────────
+// ALERTAS
+// ─────────────────────────────────────────────────────────────
+
+function renderAlertas(alertas) {
+  var el = document.getElementById("alertas-container");
+  if (!alertas || alertas.length === 0) {
+    el.innerHTML = '<div class="alerta-item verde"><span class="alerta-icono">✅</span>' +
+      '<div class="alerta-texto"><strong>Sin alertas activas</strong>Todos los datos parecen correctos.</div></div>';
+    return;
+  }
+
+  // Ordenar: rojo primero, luego amarillo
+  var sorted = alertas.slice().sort(function(a, b) {
+    var orden = { rojo: 0, amarillo: 1, verde: 2 };
+    return (orden[a.tipo] || 2) - (orden[b.tipo] || 2);
+  });
+
+  var html = "";
+  sorted.forEach(function(a) {
+    var icono = a.tipo === "rojo" ? "🔴" : a.tipo === "amarillo" ? "🟡" : "🟢";
+    html += '<div class="alerta-item ' + a.tipo + '">' +
+      '<span class="alerta-icono">' + icono + '</span>' +
+      '<div class="alerta-texto">' +
+      '<strong>Fila ' + a.fila + ' — ' + esc(a.proveedor) + '</strong>' +
+      esc(a.mensaje) +
+      '</div></div>';
+  });
+
+  el.innerHTML = html;
+}
+
+// ─────────────────────────────────────────────────────────────
+// TABLA DE FACTURAS
+// ─────────────────────────────────────────────────────────────
+
+function renderTablaFacturas(rows) {
+  var headers = STATE.headers;
+  if (!headers.length) return;
+
+  // Columnas a mostrar (subconjunto legible)
+  var colsShow = ["FECHA", "TRIMESTRE", "PROVEEDOR", "NUM_FACTURA", "BASE", "IVA_PCT", "IVA_EUR", "TOTAL", "ESTADO", "NOTAS"];
+  var indices = colsShow.map(function(c) { return IDX[c]; }).filter(function(i) { return i !== undefined; });
+
+  var html = '<table><thead><tr>';
+  indices.forEach(function(i, n) {
+    html += '<th onclick="sortByCol(' + i + ')">' + esc(headers[i]) + '</th>';
+  });
+  html += '</tr></thead><tbody>';
+
+  if (!rows.length) {
+    html += '<tr><td colspan="' + indices.length + '" style="text-align:center;padding:20px;color:var(--color-muted)">Sin resultados para los filtros seleccionados.</td></tr>';
+  } else {
+    rows.forEach(function(row) {
+      var estado = String(row[IDX["ESTADO"]] || "").trim();
+      html += '<tr>';
+      indices.forEach(function(i) {
+        var val = row[i];
+        if (i === IDX["ESTADO"]) {
+          html += '<td>' + badgeEstado(String(val || "")) + '</td>';
+        } else if (i === IDX["BASE"] || i === IDX["IVA_EUR"] || i === IDX["TOTAL"]) {
+          var n = parseFloat(val) || 0;
+          html += '<td style="text-align:right">' + fmt€(n) + '</td>';
+        } else if (i === IDX["IVA_PCT"]) {
+          html += '<td style="text-align:right">' + (val !== "" && val !== null ? val + "%" : "—") + '</td>';
+        } else {
+          html += '<td>' + esc(String(val !== null && val !== undefined ? val : "")) + '</td>';
+        }
+      });
+      html += '</tr>';
+    });
+  }
+
+  html += '</tbody></table>';
+  document.getElementById("tabla-facturas").innerHTML = html;
+  document.getElementById("tabla-count").textContent = rows.length + " facturas";
+}
+
+function badgeEstado(estado) {
+  var cls = "gris";
+  if (estado === "Registrada")           cls = "verde";
+  else if (estado === "Revisar")         cls = "amarillo";
+  else if (estado === "Validada Carlos") cls = "azul";
+  else if (estado === "Error lectura")   cls = "rojo";
+  else if (estado === "Duplicada")       cls = "rojo";
+  return '<span class="badge badge-' + cls + '">' + esc(estado) + '</span>';
+}
+
+// ─────────────────────────────────────────────────────────────
+// RESUMEN TRIMESTRAL
+// ─────────────────────────────────────────────────────────────
+
+function renderResumenTrimestral(porTrimestre) {
+  var keys = Object.keys(porTrimestre).sort();
+  if (!keys.length) { document.getElementById("tabla-trimestres").innerHTML = "<p style='color:var(--color-muted)'>Sin datos.</p>"; return; }
+
+  var html = '<table><thead><tr><th>Trimestre</th><th style="text-align:right">Facturas</th><th style="text-align:right">Base (€)</th><th style="text-align:right">IVA (€)</th><th style="text-align:right">Total (€)</th></tr></thead><tbody>';
+  keys.forEach(function(k) {
+    var d = porTrimestre[k];
+    html += '<tr><td><strong>' + esc(k) + '</strong></td>' +
+      '<td style="text-align:right">' + d.count + '</td>' +
+      '<td style="text-align:right">' + fmt€(d.base) + '</td>' +
+      '<td style="text-align:right">' + fmt€(d.iva)  + '</td>' +
+      '<td style="text-align:right">' + fmt€(d.total) + '</td>' +
+      '</tr>';
+  });
+  html += '</tbody></table>';
+  document.getElementById("tabla-trimestres").innerHTML = html;
+}
+
+// ─────────────────────────────────────────────────────────────
+// RANKING PROVEEDORES
+// ─────────────────────────────────────────────────────────────
+
+function renderResumenProveedores(porProveedor) {
+  var entries = Object.keys(porProveedor).map(function(k) {
+    return { prov: k, total: porProveedor[k].total, count: porProveedor[k].count };
+  }).sort(function(a, b) { return b.total - a.total; });
+
+  if (!entries.length) { document.getElementById("tabla-proveedores").innerHTML = "<p style='color:var(--color-muted)'>Sin datos.</p>"; return; }
+
+  var html = '<table><thead><tr><th>Proveedor</th><th style="text-align:right">Facturas</th><th style="text-align:right">Total (€)</th></tr></thead><tbody>';
+  entries.forEach(function(e) {
+    html += '<tr><td>' + esc(e.prov) + '</td>' +
+      '<td style="text-align:right">' + e.count + '</td>' +
+      '<td style="text-align:right">' + fmt€(e.total) + '</td></tr>';
+  });
+  html += '</tbody></table>';
+  document.getElementById("tabla-proveedores").innerHTML = html;
+}
+
+// ─────────────────────────────────────────────────────────────
+// PROVEEDORES NUEVOS
+// ─────────────────────────────────────────────────────────────
+
+function renderProveedoresNuevos(nuevos) {
+  var el = document.getElementById("tabla-nuevos");
+  if (!nuevos || !nuevos.length) {
+    el.innerHTML = '<p style="color:var(--color-muted);padding:12px">Sin proveedores nuevos sin clasificar.</p>';
+    return;
+  }
+
+  var html = '<table><thead><tr><th>Proveedor</th><th>Primera aparición (fila)</th></tr></thead><tbody>';
+  nuevos.forEach(function(n) {
+    html += '<tr><td>' + esc(n.proveedor) + '</td><td>Fila ' + n.fila + '</td></tr>';
+  });
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+// ─────────────────────────────────────────────────────────────
+// FILTROS
+// ─────────────────────────────────────────────────────────────
+
+function populateFiltros() {
+  var rows = STATE.facturas;
+  var provSet  = {};
+  var trimSet  = {};
+  var mesSet   = {};
+  var estadoSet = {};
+
+  rows.forEach(function(row) {
+    var prov = String(row[IDX["PROVEEDOR"]] || "").trim();
+    var trim = String(row[IDX["TRIMESTRE"]] || "").trim();
+    var estado = String(row[IDX["ESTADO"]] || "").trim();
+    var fecha = String(row[IDX["FECHA"]] || "").trim();
+
+    if (prov)   provSet[prov]     = 1;
+    if (trim)   trimSet[trim]     = 1;
+    if (estado) estadoSet[estado] = 1;
+
+    if (fecha && fecha.indexOf("/") >= 0) {
+      var pf = fecha.split("/");
+      if (pf.length >= 2) mesSet[pf[1] + "/" + (pf[2] || "")] = 1;
+    }
+  });
+
+  fillSelect("filtro-trimestre", Object.keys(trimSet).sort());
+  fillSelect("filtro-mes",       Object.keys(mesSet).sort());
+  fillSelect("filtro-proveedor", Object.keys(provSet).sort());
+  fillSelect("filtro-estado",    Object.keys(estadoSet).sort());
+}
+
+function fillSelect(id, options) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.innerHTML = '<option value="">Todos</option>';
+  options.forEach(function(o) {
+    var opt = document.createElement("option");
+    opt.value = o; opt.textContent = o;
+    el.appendChild(opt);
+  });
+}
+
+function onFiltroChange() {
+  STATE.filtros.trimestre = document.getElementById("filtro-trimestre").value;
+  STATE.filtros.mes       = document.getElementById("filtro-mes").value;
+  STATE.filtros.proveedor = document.getElementById("filtro-proveedor").value;
+  STATE.filtros.estado    = document.getElementById("filtro-estado").value;
+  STATE.filtros.busqueda  = (document.getElementById("filtro-busqueda").value || "").toLowerCase();
+  renderTablaFacturas(filteredRows());
+}
+
+function limpiarFiltros() {
+  ["filtro-trimestre","filtro-mes","filtro-proveedor","filtro-estado"].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.value = "";
+  });
+  var b = document.getElementById("filtro-busqueda");
+  if (b) b.value = "";
+  STATE.filtros = { trimestre:"", mes:"", proveedor:"", estado:"", busqueda:"" };
+  renderTablaFacturas(filteredRows());
+}
+
+function filteredRows() {
+  var f = STATE.filtros;
+  return STATE.facturas.filter(function(row) {
+    if (f.trimestre) {
+      var t = String(row[IDX["TRIMESTRE"]] || "").trim();
+      if (t !== f.trimestre) return false;
+    }
+    if (f.proveedor) {
+      var p = String(row[IDX["PROVEEDOR"]] || "").trim();
+      if (p !== f.proveedor) return false;
+    }
+    if (f.estado) {
+      var e = String(row[IDX["ESTADO"]] || "").trim();
+      if (e !== f.estado) return false;
+    }
+    if (f.mes) {
+      var fecha = String(row[IDX["FECHA"]] || "").trim();
+      var pf = fecha.split("/");
+      var mesFila = pf.length >= 3 ? pf[1] + "/" + pf[2] : "";
+      if (mesFila !== f.mes) return false;
+    }
+    if (f.busqueda) {
+      var linea = row.join(" ").toLowerCase();
+      if (linea.indexOf(f.busqueda) < 0) return false;
+    }
+    return true;
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
+// SORT
+// ─────────────────────────────────────────────────────────────
+
+function sortByCol(colIdx) {
+  if (STATE.sortCol === colIdx) {
+    STATE.sortAsc = !STATE.sortAsc;
+  } else {
+    STATE.sortCol = colIdx;
+    STATE.sortAsc = true;
+  }
+  var rows = filteredRows().slice();
+  rows.sort(function(a, b) {
+    var va = a[colIdx]; var vb = b[colIdx];
+    if (va < vb) return STATE.sortAsc ? -1 :  1;
+    if (va > vb) return STATE.sortAsc ?  1 : -1;
+    return 0;
+  });
+  renderTablaFacturas(rows);
+}
+
+// ─────────────────────────────────────────────────────────────
+// UTILIDADES
+// ─────────────────────────────────────────────────────────────
+
+function fmt€(n) {
+  if (n === null || n === undefined || n === "") return "—";
+  var num = parseFloat(n);
+  if (isNaN(num)) return "—";
+  return num.toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function mostrarLoading(on) {
+  var el = document.getElementById("loading");
+  if (el) el.style.display = on ? "flex" : "none";
+}
+
+function mostrarError(msg) {
+  var el = document.getElementById("error-container");
+  if (el) { el.style.display = "block"; el.textContent = "Error: " + msg; }
+}
+
+function mostrarWarning(msg) {
+  var el = document.getElementById("warning-container");
+  if (el) { el.style.display = "block"; el.textContent = msg; }
+}
+
+function refrescar() {
+  cargarDatos();
+}
+</script>
