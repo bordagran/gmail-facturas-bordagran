@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard Fiscal Bordagran</title>
+  <?!= include('styles') ?>
+</head>
+<body>
+
+  <header>
+    <div>
+      <h1>📊 Dashboard Fiscal Bordagran</h1>
+      <div class="subtitle">Solo lectura — v3.3.0</div>
+    </div>
+    <button class="btn-refresh" onclick="refrescar()">⟳ Refrescar</button>
+  </header>
+
+  <div class="container">
+
+    <!-- Loading -->
+    <div id="loading" class="loading">
+      <div class="spinner"></div>
+      Cargando datos de Google Sheets...
+    </div>
+
+    <!-- Error -->
+    <div id="error-container" class="error-msg" style="display:none"></div>
+
+    <!-- Warning (ej: MAESTRO_PROVEEDORES no existe) -->
+    <div id="warning-container" class="alerta-item amarillo" style="display:none;margin-bottom:16px">
+      <span class="alerta-icono">⚠️</span>
+      <div class="alerta-texto"></div>
+    </div>
+
+    <!-- Filtros -->
+    <div class="filtros">
+      <div class="filtro-grupo">
+        <label>Trimestre</label>
+        <select id="filtro-trimestre" onchange="onFiltroChange()">
+          <option value="">Todos</option>
+        </select>
+      </div>
+      <div class="filtro-grupo">
+        <label>Mes</label>
+        <select id="filtro-mes" onchange="onFiltroChange()">
+          <option value="">Todos</option>
+        </select>
+      </div>
+      <div class="filtro-grupo">
+        <label>Proveedor</label>
+        <select id="filtro-proveedor" onchange="onFiltroChange()">
+          <option value="">Todos</option>
+        </select>
+      </div>
+      <div class="filtro-grupo">
+        <label>Estado</label>
+        <select id="filtro-estado" onchange="onFiltroChange()">
+          <option value="">Todos</option>
+        </select>
+      </div>
+      <div class="filtro-grupo">
+        <label>Búsqueda</label>
+        <input type="text" id="filtro-busqueda" placeholder="Buscar..." oninput="onFiltroChange()">
+      </div>
+      <button class="btn-limpiar" onclick="limpiarFiltros()">✕ Limpiar</button>
+    </div>
+
+    <!-- KPIs -->
+    <div class="seccion-titulo">Resumen</div>
+    <div class="kpi-grid" id="kpi-grid"></div>
+
+    <!-- Alertas -->
+    <div class="seccion-titulo">Alertas fiscales</div>
+    <div class="alertas-lista" id="alertas-container"></div>
+
+    <!-- Tabla de facturas -->
+    <div class="seccion-titulo">
+      Facturas <span id="tabla-count" style="font-weight:400;color:var(--color-muted)"></span>
+    </div>
+    <div class="tabla-wrapper">
+      <div id="tabla-facturas"></div>
+    </div>
+
+    <!-- Resumen trimestral -->
+    <div class="seccion-titulo">Resumen por trimestre</div>
+    <div class="tabla-wrapper">
+      <div id="tabla-trimestres"></div>
+    </div>
+
+    <!-- Ranking proveedores -->
+    <div class="seccion-titulo">Ranking de proveedores (por importe total)</div>
+    <div class="tabla-wrapper">
+      <div id="tabla-proveedores"></div>
+    </div>
+
+    <!-- Proveedores nuevos -->
+    <div class="seccion-titulo">Proveedores nuevos sin clasificar en MAESTRO_PROVEEDORES</div>
+    <div class="tabla-wrapper">
+      <div id="tabla-nuevos"></div>
+    </div>
+
+  </div><!-- /container -->
+
+  <?!= include('scripts') ?>
+</body>
+</html>
