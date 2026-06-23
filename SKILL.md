@@ -348,9 +348,11 @@ Proveedores que pueden registrarse con referencia técnica cuando total>0 y num_
   registrada o detectada como duplicada en la misma ejecución.
 - Anthropic SÍ es proveedor válido. La recarga API es gasto fiscal real.
 
-### THCLOTHES: facturas RITI siempre en estado Revisar (L-033)
+### THCLOTHES: facturas RITI siempre en estado Revisar (L-033 / L-053)
 - IVA 0% intracomunitario PT→ES → revisión fiscal obligatoria por el gestor.
 - El sistema las marca `Revisar` y nunca las suma al total deducible automáticamente.
+- Confirmado post ejecución real v3.2.1: THClothes es proveedor real con importe válido.
+- Gate automático RITI/IVA0 pendiente de implementar en v3.3.0 (ver L-053).
 
 ### Si el sandbox Linux no puede eliminar el lock NTFS (L-039)
 Pedir a Juan que ejecute desde PowerShell Windows:
@@ -364,4 +366,28 @@ Si el agente tiene acceso a terminal/bash:
 - **Debe** devolver resultados ya procesados (antes/después, nuevos registros, pendientes).
 - **No** debe limitarse a mostrar comandos y pedir a Juan que los ejecute,
   salvo que la operación requiera Windows (lock NTFS, ejecución real, commit).
+
+---
+
+## Backlog técnico pendiente (post v3.2.1)
+
+### v3.3.0 — Gate automático THClothes + RITI/IVA0 (L-053)
+- Detectar en el extractor si la factura es RITI / IVA 0 / intracomunitaria.
+- Forzar estado `Revisar` aunque el resto del registro sea completo.
+- Nunca marcar `Registrada` automáticamente una factura con RITI o IVA 0 intracomunitario.
+- **NO tocar en v3.2.x. Implementar solo en v3.3.0 con dry-run validado.**
+
+### v3.3.0 / v3.4.0 — Automatización asistida Niba (L-054)
+- Investigar si el enlace de descarga de facturas Niba es accesible sin DNI.
+- Si sí: script que descargue el PDF y lo procese normalmente.
+- Si requiere DNI: solo introducción manual controlada en tiempo de ejecución.
+  - Nunca almacenar DNI en código, config, logs, GitHub ni runtime.
+  - El usuario introduce el DNI en la sesión, no se guarda en ningún lado.
+- **Requisito previo**: consentimiento explícito del usuario en cada ejecución.
+- **NO automatizar en v3.2.x. Solo revisión manual hasta v3.3.0/v3.4.0.**
+
+### Niba v3.2.x (estado actual aceptado)
+- Niba permanece como proveedor real.
+- Facturas sin PDF adjunto → `NIBA-ENLACE-{hash}` en pendientes → revisión manual Carlos.
+- Facturas con PDF ilegible → estado `Revisar` → revisión manual Carlos.
 

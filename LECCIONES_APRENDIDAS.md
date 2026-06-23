@@ -762,3 +762,58 @@ el remitente y ANTES de `descargar_adjuntos_pdf()`. Si `remitente == "bordagran@
 clasificar como `NIBA-ENLACE-{hash}` en pendientes para revision manual.
 No guardar DNI ni acceder automaticamente a enlaces de descarga con autenticacion.
 
+---
+
+## L-053 | THClothes + RITI/IVA0/intracomunitario: forzar estado Revisar (post v3.2.1)
+
+**Fecha**: 2026-06-23
+
+**Contexto**: Tras la ejecucion real controlada de v3.2.1 se confirma que THClothes es
+proveedor real de Bordagran. Sus facturas tienen importe valido y deben mantenerse en
+`FACTURA PROVEEDORES`. Sin embargo, pueden requerir validacion fiscal especial:
+operacion intracomunitaria, regimen RITI, IVA 0 %, o tratamiento similar que no puede
+resolverse automaticamente sin revision humana.
+
+**Problema potencial**: Si el automatismo registra THClothes como `Registrada` directamente,
+podria quedar mal clasificado fiscalmente (IVA intracomunitario !== IVA nacional). El error
+solo se detectaria en revision trimestral o inspeccion.
+
+**Regla operativa permanente**:
+> `THClothes` + cualquier indicador de RITI / IVA 0 / intracomunitario =>
+> Estado forzado a `Revisar`, nunca `Registrada` automatica.
+> El responsable fiscal (Carlos) debe validar el tratamiento IVA antes de marcar Registrada.
+> El script puede insertar la linea pero con estado `Revisar` y motivo explicito.
+
+**Estado en v3.2.1**: No implementado como gate automatico. Pendiente para v3.3.0.
+THClothes queda en revision manual mientras no exista el gate especifico.
+
+---
+
+## L-054 | Niba Energia: estado Revisar aceptado, automatizacion pendiente (post v3.2.1)
+
+**Fecha**: 2026-06-23
+
+**Contexto**: Niba Energia es proveedor real de Bordagran. El problema actual no es fiscal
+sino operativo: la factura requiere descarga manual desde un enlace que puede exigir
+autenticacion (DNI u otro metodo). El extractor actual genera lineas a 0,00 EUR o
+clasifica el caso como `NIBA-ENLACE-{hash}` en pendientes.
+
+**Decision aceptada para v3.2.x**:
+- Mantener Niba como proveedor real. No excluir. No mover a exclusiones.
+- Aceptar que la linea quede en estado `Revisar` o como pendiente `NIBA-ENLACE-{hash}`.
+- Esto es preferible a perder el control del gasto o a intentar automatizar con DNI.
+- Revision manual por Carlos para cada factura Niba hasta que exista solucion tecnica.
+
+**Regla operativa permanente**:
+> Niba ilegible / pendiente descarga => mantener en `Revisar`.
+> NUNCA guardar DNI en codigo, config, logs, GitHub ni runtime.
+> NUNCA intentar acceder automaticamente a enlaces que exijan autenticacion personal.
+
+**Automatizacion futura (pendiente v3.3.0 / v3.4.0)**:
+- Investigar si Gmail permite acceder al enlace de descarga de Niba sin DNI.
+- Posible script asistido que abra el enlace, descargue la factura y la procese.
+- Si el enlace requiere DNI: solo introduccion manual controlada en tiempo de ejecucion,
+  nunca almacenada en ningun lado.
+- Si se automatiza, usar secreto local efimero (variable de entorno en sesion, no en fichero).
+- Requisito previo: consentimiento explicito del usuario en cada ejecucion si hay DNI involucrado.
+
