@@ -11,7 +11,7 @@ description: >
   y cada día a las 20:00 (resumen diario).
 ---
 
-# Skill: gmail-facturas-bordagran v3.2.0  [VALIDADO — dry-run 2026-06-22]
+# Skill: gmail-facturas-bordagran v3.2.1  [VALIDADO — dry-run 2026-06-23]
 
 ## Reglas de oro (no negociables)
 
@@ -238,14 +238,14 @@ python scripts/detectar_duplicados_sheet.py --skill-dir .
 
 ---
 
-## Resultado validado Q2 2026 (dry-run 2026-06-22, rama dev/v3.2.0)
+## Resultado validado Q2 2026 (dry-run 2026-06-23, rama dev/v3.2.1)
 
 ```
 Habria registrado : 21
 Duplicados        : 15
-No fiscales       : 89
-Pendientes        : 11
-Errores           : 0
+No fiscales       : 94
+Pendientes        :  4  ← solo Velilla (revision manual)
+Errores           :  0
 Rango             : 2026-04-01 → 2026-06-20
 Proveedores       : 32 cargados
 Exclusiones       : 5 cargadas

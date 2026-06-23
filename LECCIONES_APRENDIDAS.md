@@ -729,3 +729,36 @@ proveedor GOR Factory. Valores hardcodeados, validados manualmente. `_pendiente_
 > NUNCA dejar el gasto fuera del registro fiscal.
 > El fallback manual debe ser lo mas especifico posible: solo para ese filename exacto.
 
+---
+
+## L-052 | GMAIL propio: facturas emitidas a clientes no son gastos de proveedor (v3.2.1)
+
+**Fecha**: 2026-06-23
+
+**Problema**: Emails enviados desde `bordagran@gmail.com` contenian PDFs de facturas
+emitidas POR Bordagran A sus clientes (Apleona, otros). El pipeline los procesaba como
+si fueran facturas recibidas de proveedores: descargaba el PDF, extraia datos,
+intentaba clasificar tipo_doc como `factura`, y terminaban en `PENDIENTE_EXTRACCION_SIN_REGISTRAR`
+porque les faltaban datos (num_factura, total). Resultado: 7 falsos pendientes fiscales.
+
+**Causa raiz**: El gate `if es_desconocido:` (donde se intercepta `remitente=bordagran@gmail.com`)
+llegaba DESPUES de clasificar el tipo de documento. El clasificador veia palabras como
+"factura" en el PDF y asignaba `tipo_doc = "factura"` antes de llegar al chequeo de remitente.
+
+**Correccion**: Gate temprano en el bucle principal, inmediatamente despues de identificar
+el remitente y ANTES de `descargar_adjuntos_pdf()`. Si `remitente == "bordagran@gmail.com"`:
+- Clasificar como `factura_propia_emitida` en `no_fiscales`.
+- `continue` — saltar el mensaje completo.
+- No descargar, no extraer, no subir a Drive, no intentar insertar.
+
+**Regla operativa permanente**:
+> `bordagran@gmail.com` como remitente = cuenta propia de Bordagran.
+> Los PDFs de esos emails son facturas emitidas a clientes (documentos de venta),
+> no facturas recibidas de proveedores (gastos deducibles).
+> Gate: nivel mensaje, antes de descargar PDFs. Tipo: `factura_propia_emitida`.
+> NUNCA registrar en FACTURA PROVEEDORES.
+
+**Aplica tambien a**: Niba sin PDF adjunto — si no hay adjunto y el proveedor es Niba,
+clasificar como `NIBA-ENLACE-{hash}` en pendientes para revision manual.
+No guardar DNI ni acceder automaticamente a enlaces de descarga con autenticacion.
+
