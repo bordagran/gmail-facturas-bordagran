@@ -1831,8 +1831,38 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
 
                 log(f"[{i+1}/{len(mensajes)}] {prov['nombre']} <{remitente}>")
 
+                # v3.2.1 L-052: Gate temprano GMAIL-PROPIO
+                # Si el remitente ES bordagran@gmail.com, el email proviene de la propia cuenta de Bordagran.
+                # Estos PDFs son facturas emitidas POR Bordagran A sus clientes — NO son facturas de proveedor.
+                # Interceptar ANTES de descargar/extraer/clasificar/subir para evitar falsos pendientes.
+                if remitente.lower().strip() == "bordagran@gmail.com":
+                    log(f"  [GMAIL-PROPIO] Email de cuenta propia → no fiscal (factura emitida a cliente, no gasto)")
+                    r["no_fiscales"].append({
+                        "nombre": f"EMAIL:{msg_id[:12]}",
+                        "proveedor": "Bordagran (cuenta propia)",
+                        "tipo": "factura_propia_emitida",
+                        "motivo": "Remitente bordagran@gmail.com — factura emitida por Bordagran a cliente, no gasto de proveedor (v3.2.1 L-052)",
+                    })
+                    continue  # NO descargar, NO extraer, NO subir, NO insertar en Sheet
+
                 pdfs = descargar_adjuntos_pdf(gmail, msg_id, tmp_dir)
                 if not pdfs:
+                    # v3.2.1: Niba sin adjunto → probablemente enlace de descarga con autenticacion (L-052)
+                    # No guardar DNI ni credenciales en ningun sitio — solo marcar para revision manual.
+                    _pnl_sinpdf = prov["nombre"].lower().replace(" ", "").replace("í", "i").replace("ì", "i")
+                    if any(kw in _pnl_sinpdf for kw in PROVEEDORES_PDF_ILEGIBLE):
+                        import hashlib as _hl_niba_lnk
+                        _ref_lnk = _hl_niba_lnk.md5(msg_id.encode()).hexdigest()[:10]
+                        _num_lnk = f"NIBA-ENLACE-{_ref_lnk}"
+                        log(f"  [NIBA-ENLACE] Sin PDF adjunto — posible enlace de descarga con DNI. Ref: {_num_lnk}")
+                        r["pendientes"].append({
+                            "nombre": _num_lnk,
+                            "proveedor": prov["nombre"],
+                            "motivo": "Niba sin PDF adjunto — enlace de descarga que exige autenticacion — revisar manualmente (v3.2.1 L-052)",
+                        })
+                        if not dry_run:
+                            etiquetar_mensaje(gmail, msg_id, label_pendiente_id)
+                        continue
                     # Sin PDF: intentar parsear cuerpo (ej: SOLS Aviso Giro)
                     cuerpo = extraer_texto_email(gmail, msg_id)
                     if cuerpo and tiene_datos_fiscales(cuerpo):

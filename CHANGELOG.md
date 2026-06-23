@@ -1,5 +1,53 @@
 # CHANGELOG — gmail-facturas-bordagran
 
+## [3.2.1] - 2026-06-23
+
+### Objetivo
+Eliminar falsos pendientes fiscales de GMAIL propio (facturas emitidas a clientes de Bordagran)
+y mejorar el manejo de Niba sin PDF adjunto (enlace con autenticacion).
+Resultado validado dry-run: 21 registradas | 94 no fiscales | 4 pendientes | 0 errores.
+
+### Gate temprano GMAIL-PROPIO (L-052)
+
+**Problema:** Emails de `bordagran@gmail.com` contenian PDFs de facturas emitidas POR Bordagran
+A sus clientes (p.ej. Apleona, otros). Estos documentos no son gastos de proveedor
+deducibles de Bordagran — son facturas de venta del propio negocio.
+
+El gate anterior en el bloque `if es_desconocido:` era demasiado tardio: el PDF ya habia
+sido descargado, clasificado como `factura` por el tipo detector, y marcado como
+`PENDIENTE_EXTRACCION_SIN_REGISTRAR` antes de llegar al chequeo de remitente.
+
+**Fix:** Gate temprano en el bucle principal, ANTES de `descargar_adjuntos_pdf()`.
+Si `remitente.lower().strip() == "bordagran@gmail.com"` → saltar inmediatamente con `continue`.
+El email se clasifica como `factura_propia_emitida` en `no_fiscales`. No se descarga,
+no se extrae, no se sube, no se inserta, no se genera pendiente.
+
+**Impacto:** Pendientes Q2 2026 bajan de 11 a 4 (los 4 restantes son Velilla Group).
+No fiscales suben de 89 a 94 (+5 emails propios interceptados).
+
+**Regla operativa permanente:**
+> Si el remitente de un email es `bordagran@gmail.com`, el email proviene de la cuenta
+> propia de Bordagran. Sus adjuntos son facturas emitidas a clientes, no facturas de
+> proveedor. Nunca deben entrar en FACTURA PROVEEDORES como gasto.
+> Gate: nivel mensaje, antes de descargar PDFs.
+
+### Niba sin PDF — enlace con autenticacion (L-052)
+
+**Caso nuevo:** Niba Energia puede enviar emails sin PDF adjunto, solo con enlace de
+descarga que requiere autenticacion (DNI u otro). El sistema caia en `sin_pdf` sin
+ningun aviso util.
+
+**Fix:** Gate al inicio del bloque `if not pdfs:`: si el proveedor es Niba (en
+`PROVEEDORES_PDF_ILEGIBLE`) y no hay adjuntos → registrar `NIBA-ENLACE-{hash}` en
+`pendientes` con motivo explicito. No guardar DNI ni credenciales en ningun sitio.
+
+**Regla:**
+> NIBA sin PDF adjunto = posible enlace de descarga con autenticacion.
+> Registrar como NIBA-ENLACE-{ref} en pendientes para revision manual.
+> Nunca intentar acceder al enlace de forma automatica. Nunca guardar DNI.
+
+---
+
 ## [3.2.0] - 2026-06-22
 
 ### Objetivo
