@@ -39,6 +39,12 @@ runtime/dryrun_*.txt
 runtime/duplicados_*.csv
 
 # Historico dry-run v3.4.0
+# Historico clasificador v3.4.2
+runtime/historico_facturas_probables.csv
+runtime/historico_facturas_probables.json
+runtime/historico_documentos_no_fiscales.csv
+runtime/historico_documentos_no_fiscales.json
+
 runtime/historico_facturas_dryrun.json
 runtime/proveedores_candidatos.csv
 runtime/tipos_documento_candidatos.csv
