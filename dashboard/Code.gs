@@ -101,6 +101,21 @@ function getMaestro() {
 
 
 /**
+ * Parseo seguro de IVA%: parseFloat("0") || null = null (falsy trap).
+ * Esta función devuelve 0 correctamente cuando el valor es "0" o "0%".
+ * SOLO LECTURA — función auxiliar pura.
+ */
+function parseIvaPctDashboard(valor) {
+  if (valor === null || valor === undefined) return null;
+  var txt = String(valor).trim();
+  if (!txt || txt === "-") return null;
+  txt = txt.replace(/%/g, "").replace(",", ".").trim();
+  var n = parseFloat(txt);
+  return isNaN(n) ? null : n;
+}
+
+
+/**
  * Devuelve un resumen consolidado: KPIs, alertas, agrupaciones.
  * Todo el cálculo ocurre en memoria — SOLO LECTURA.
  */
@@ -211,7 +226,7 @@ function getResumen() {
     var fecha   = String(row[idxFecha]  || "").trim();
     var numFact = String(row[idxNumFact]|| "").trim();
     var ruta    = String(row[idxRuta]   || "").trim();
-    var ivaPct  = parseFloat(row[idxIvaPct]) || null;
+    var ivaPct  = parseIvaPctDashboard(row[idxIvaPct]);
 
     sumaBase    += base;
     sumaIvaEur  += ivaEur;
@@ -229,16 +244,21 @@ function getResumen() {
       sinPdf++;
     }
 
-    // IVA 0% (intracomunitario)
-    if (ivaPct === 0 || ivaPct === 0.0) {
-      ivaCero++;
-    }
-
-    // Intracomunitario / RITI
+    // Maestro lookup — debe ir antes de ivaCero para incluir intracomunitarias
     var provKey = prov.toLowerCase().replace(/\s+/g, "");
     var maestroEntry = maestroMap[provKey];
-    if (maestroEntry && String(maestroEntry["Tipo fiscal"] || "").indexOf("Intracomunitario") >= 0) {
+    var esIntracomunitario = maestroEntry &&
+      String(maestroEntry["Tipo fiscal"] || "").indexOf("Intracomunitario") >= 0;
+
+    // Intracomunitario / RITI (contador separado)
+    if (esIntracomunitario) {
       intracomunitario++;
+    }
+
+    // IVA 0%: IVA% explícito = 0 O proveedor intracomunitario en Maestro
+    // Garantiza: KPI IVA 0% >= KPI Intracomunit. siempre
+    if (ivaPct === 0 || esIntracomunitario) {
+      ivaCero++;
     }
 
     // Fecha sospechosa: trimestre en columna B no cuadra con fecha

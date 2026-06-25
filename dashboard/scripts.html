@@ -126,9 +126,9 @@ function renderKPIs(kpis) {
   var html = "";
 
   html += kpiCard("Total facturas",  kpis.total_facturas,     "",          "azul");
-  html += kpiCard("Base imponible",  fmt€(kpis.suma_base),    "EUR",       "azul");
-  html += kpiCard("IVA soportado",   fmt€(kpis.suma_iva),     "EUR",       "azul");
-  html += kpiCard("Importe total",   fmt€(kpis.suma_total),   "EUR",       "azul");
+  html += kpiCard("Base imponible",  fmtEuro(kpis.suma_base),    "EUR",       "azul");
+  html += kpiCard("IVA soportado",   fmtEuro(kpis.suma_iva),     "EUR",       "azul");
+  html += kpiCard("Importe total",   fmtEuro(kpis.suma_total),   "EUR",       "azul");
   html += kpiCard("Registradas",     kpis.count_registrada,   "facturas",  "verde");
   html += kpiCard("En Revisar",      kpis.count_revisar,      "facturas",  kpis.count_revisar > 0 ? "amarillo" : "verde");
   html += kpiCard("Validadas",       kpis.count_validada,     "por Carlos","verde");
@@ -211,7 +211,7 @@ function renderTablaFacturas(rows) {
           html += '<td>' + badgeEstado(String(val || "")) + '</td>';
         } else if (i === IDX["BASE"] || i === IDX["IVA_EUR"] || i === IDX["TOTAL"]) {
           var n = parseFloat(val) || 0;
-          html += '<td style="text-align:right">' + fmt€(n) + '</td>';
+          html += '<td style="text-align:right">' + fmtEuro(n) + '</td>';
         } else if (i === IDX["IVA_PCT"]) {
           html += '<td style="text-align:right">' + (val !== "" && val !== null ? val + "%" : "—") + '</td>';
         } else {
@@ -242,7 +242,8 @@ function badgeEstado(estado) {
 // ─────────────────────────────────────────────────────────────
 
 function renderResumenTrimestral(porTrimestre) {
-  var keys = Object.keys(porTrimestre).sort();
+  // Orden cronológico descendente (trimestre más reciente primero)
+  var keys = sortTrimestresDesc(Object.keys(porTrimestre));
   if (!keys.length) { document.getElementById("tabla-trimestres").innerHTML = "<p style='color:var(--color-muted)'>Sin datos.</p>"; return; }
 
   var html = '<table><thead><tr><th>Trimestre</th><th style="text-align:right">Facturas</th><th style="text-align:right">Base (€)</th><th style="text-align:right">IVA (€)</th><th style="text-align:right">Total (€)</th></tr></thead><tbody>';
@@ -250,9 +251,9 @@ function renderResumenTrimestral(porTrimestre) {
     var d = porTrimestre[k];
     html += '<tr><td><strong>' + esc(k) + '</strong></td>' +
       '<td style="text-align:right">' + d.count + '</td>' +
-      '<td style="text-align:right">' + fmt€(d.base) + '</td>' +
-      '<td style="text-align:right">' + fmt€(d.iva)  + '</td>' +
-      '<td style="text-align:right">' + fmt€(d.total) + '</td>' +
+      '<td style="text-align:right">' + fmtEuro(d.base) + '</td>' +
+      '<td style="text-align:right">' + fmtEuro(d.iva)  + '</td>' +
+      '<td style="text-align:right">' + fmtEuro(d.total) + '</td>' +
       '</tr>';
   });
   html += '</tbody></table>';
@@ -274,7 +275,7 @@ function renderResumenProveedores(porProveedor) {
   entries.forEach(function(e) {
     html += '<tr><td>' + esc(e.prov) + '</td>' +
       '<td style="text-align:right">' + e.count + '</td>' +
-      '<td style="text-align:right">' + fmt€(e.total) + '</td></tr>';
+      '<td style="text-align:right">' + fmtEuro(e.total) + '</td></tr>';
   });
   html += '</tbody></table>';
   document.getElementById("tabla-proveedores").innerHTML = html;
@@ -305,28 +306,33 @@ function renderProveedoresNuevos(nuevos) {
 
 function populateFiltros() {
   var rows = STATE.facturas;
-  var provSet  = {};
-  var trimSet  = {};
-  var mesSet   = {};
+  var provSet   = {};
+  var trimSet   = {};
+  var mesSet    = {};
   var estadoSet = {};
 
   rows.forEach(function(row) {
-    var prov = String(row[IDX["PROVEEDOR"]] || "").trim();
-    var trim = String(row[IDX["TRIMESTRE"]] || "").trim();
-    var estado = String(row[IDX["ESTADO"]] || "").trim();
-    var fecha = String(row[IDX["FECHA"]] || "").trim();
+    var prov    = String(row[IDX["PROVEEDOR"]] || "").trim();
+    var trimRaw = row[IDX["TRIMESTRE"]];
+    var estado  = String(row[IDX["ESTADO"]]    || "").trim();
+    var fecha   = row[IDX["FECHA"]];
+    var fechaStr = String(fecha || "").trim();
 
-    if (prov)   provSet[prov]     = 1;
-    if (trim)   trimSet[trim]     = 1;
-    if (estado) estadoSet[estado] = 1;
+    // Normalizar trimestre; si vacío o inválido, derivar desde fecha
+    var trimNorm = normalizarTrimestre(trimRaw) || derivarTrimestreDesdeFecha(fecha);
 
-    if (fecha && fecha.indexOf("/") >= 0) {
-      var pf = fecha.split("/");
+    if (prov)     provSet[prov]       = 1;
+    if (trimNorm) trimSet[trimNorm]   = 1;
+    if (estado)   estadoSet[estado]   = 1;
+
+    if (fechaStr && fechaStr.indexOf("/") >= 0) {
+      var pf = fechaStr.split("/");
       if (pf.length >= 2) mesSet[pf[1] + "/" + (pf[2] || "")] = 1;
     }
   });
 
-  fillSelect("filtro-trimestre", Object.keys(trimSet).sort());
+  // Trimestres: descendente cronológico (Q4-2026 … Q1-2025)
+  fillSelect("filtro-trimestre", sortTrimestresDesc(Object.keys(trimSet)));
   fillSelect("filtro-mes",       Object.keys(mesSet).sort());
   fillSelect("filtro-proveedor", Object.keys(provSet).sort());
   fillSelect("filtro-estado",    Object.keys(estadoSet).sort());
@@ -367,7 +373,9 @@ function filteredRows() {
   var f = STATE.filtros;
   return STATE.facturas.filter(function(row) {
     if (f.trimestre) {
-      var t = String(row[IDX["TRIMESTRE"]] || "").trim();
+      var trimRaw = row[IDX["TRIMESTRE"]];
+      var fechaRow = row[IDX["FECHA"]];
+      var t = normalizarTrimestre(trimRaw) || derivarTrimestreDesdeFecha(fechaRow) || "";
       if (t !== f.trimestre) return false;
     }
     if (f.proveedor) {
@@ -404,8 +412,18 @@ function sortByCol(colIdx) {
     STATE.sortAsc = true;
   }
   var rows = filteredRows().slice();
+  var isFechaCol = (IDX["FECHA"] !== undefined && colIdx === IDX["FECHA"]);
   rows.sort(function(a, b) {
     var va = a[colIdx]; var vb = b[colIdx];
+    if (isFechaCol) {
+      // Ordenar por timestamp real, no por texto
+      var ta = parseFechaDashboard(va);
+      var tb = parseFechaDashboard(vb);
+      if (ta === null && tb === null) return 0;
+      if (ta === null) return 1;  // fechas inválidas al final
+      if (tb === null) return -1;
+      return STATE.sortAsc ? ta - tb : tb - ta;
+    }
     if (va < vb) return STATE.sortAsc ? -1 :  1;
     if (va > vb) return STATE.sortAsc ?  1 : -1;
     return 0;
@@ -417,7 +435,7 @@ function sortByCol(colIdx) {
 // UTILIDADES
 // ─────────────────────────────────────────────────────────────
 
-function fmt€(n) {
+function fmtEuro(n) {
   if (n === null || n === undefined || n === "") return "—";
   var num = parseFloat(n);
   if (isNaN(num)) return "—";
@@ -430,6 +448,83 @@ function esc(s) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+// ─────────────────────────────────────────────────────────────
+// FECHA Y TRIMESTRE — parseo y ordenación cronológica
+// ─────────────────────────────────────────────────────────────
+
+function parseFechaDashboard(valor) {
+  if (valor instanceof Date && !isNaN(valor.getTime())) return valor.getTime();
+  if (typeof valor === "number" && isFinite(valor)) {
+    // Google Sheets serial date: días desde 1899-12-30
+    var epoch = new Date(Date.UTC(1899, 11, 30));
+    return epoch.getTime() + valor * 86400000;
+  }
+  if (valor === null || valor === undefined) return null;
+  var txt = String(valor).trim();
+  if (!txt || txt === "-" || txt === "\u2014") return null;
+  txt = txt.split(" ")[0];
+  var m;
+  // dd/mm/yyyy o d/m/yyyy o dd-mm-yyyy
+  m = txt.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (m) {
+    var d = parseInt(m[1], 10), mo = parseInt(m[2], 10) - 1, y = parseInt(m[3], 10);
+    var dt = new Date(y, mo, d);
+    if (dt.getFullYear()===y && dt.getMonth()===mo && dt.getDate()===d) return dt.getTime();
+  }
+  // yyyy-mm-dd o yyyy/mm/dd
+  m = txt.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
+  if (m) {
+    var y2 = parseInt(m[1], 10), mo2 = parseInt(m[2], 10) - 1, d2 = parseInt(m[3], 10);
+    var dt2 = new Date(y2, mo2, d2);
+    if (dt2.getFullYear()===y2 && dt2.getMonth()===mo2 && dt2.getDate()===d2) return dt2.getTime();
+  }
+  return null;
+}
+
+function normalizarTrimestre(valor) {
+  if (valor === null || valor === undefined) return "";
+  var txt = String(valor).trim().toUpperCase();
+  if (!txt || txt === "-") return "";
+  var m;
+  // Q1-2026, Q1 2026, Q1/2026
+  m = txt.match(/^Q([1-4])[\s\-\/_]*([0-9]{4})$/);
+  if (m) return "Q" + m[1] + "-" + m[2];
+  // 2026-Q1, 2026/Q1
+  m = txt.match(/^([0-9]{4})[\s\-\/_]*Q([1-4])$/);
+  if (m) return "Q" + m[2] + "-" + m[1];
+  // 1T 2026, 1T2026
+  m = txt.match(/^([1-4])T[\s\-\/_]*([0-9]{4})$/);
+  if (m) return "Q" + m[1] + "-" + m[2];
+  // T1 2026, T12026
+  m = txt.match(/^T([1-4])[\s\-\/_]*([0-9]{4})$/);
+  if (m) return "Q" + m[1] + "-" + m[2];
+  return "";
+}
+
+function derivarTrimestreDesdeFecha(valor) {
+  var ts = parseFechaDashboard(valor);
+  if (ts === null) return "";
+  var d = new Date(ts);
+  var q = Math.floor(d.getMonth() / 3) + 1;
+  return "Q" + q + "-" + d.getFullYear();
+}
+
+function trimestreSortValue(t) {
+  var m = String(t || "").match(/^Q([1-4])-([0-9]{4})$/);
+  if (!m) return -1;
+  return parseInt(m[2], 10) * 10 + parseInt(m[1], 10);
+}
+
+function sortTrimestresDesc(arr) {
+  return arr.slice().sort(function(a, b) {
+    var va = trimestreSortValue(a), vb = trimestreSortValue(b);
+    if (va < 0 && vb < 0) return a < b ? 1 : -1;
+    if (va < 0) return 1;
+    if (vb < 0) return -1;
+    return vb - va;
+  });
 }
 
 function mostrarLoading(on) {
