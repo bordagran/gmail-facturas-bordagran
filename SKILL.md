@@ -391,3 +391,68 @@ Si el agente tiene acceso a terminal/bash:
 - Facturas sin PDF adjunto → `NIBA-ENLACE-{hash}` en pendientes → revisión manual Carlos.
 - Facturas con PDF ilegible → estado `Revisar` → revisión manual Carlos.
 
+
+---
+
+## Memoria operativa obligatoria — errores aprendidos
+
+> Esta sección se actualiza cada vez que se detecta y corrige una regresión.
+> Lectura obligatoria antes de tocar cualquier archivo del dashboard.
+
+### Dashboard fiscal — reglas permanentes
+
+**El dashboard es SOLO LECTURA.** Nunca setValue, setValues, appendRow, clear, deleteRow,
+insertRow, sort, protect, setNumberFormat, setBackground, setFont, setFormula, copyTo, move.
+
+**Antes de cualquier modificación:**
+```
+1. git status --short (desde PowerShell Windows)
+2. python scripts\verificar_dashboard_solo_lectura.py
+3. node --check sobre el JS extraído del HTML
+4. git diff --check
+5. NO commit ni clasp push hasta confirmación visual de Juan
+```
+
+**Tras modificar y validar:**
+```
+cd dashboard
+clasp.cmd push          # NO "clasp push" — PowerShell bloquea .ps1
+# Luego: Implementar → Gestionar implementaciones → lápiz → Nueva versión → Implementar
+```
+
+### Errores del dashboard que NO deben repetirse
+
+| # | Error | Causa | Solución permanente |
+|---|-------|-------|---------------------|
+| L-055 | Solo 4 columnas en la tabla | `IDX["NUM_FACTURA"]` undefined cuando Sheet usa "N Factura" | `getColIdx(candidates)` con variantes múltiples |
+| L-056 | SyntaxError / dashboard en "Cargando…" | `fmt€` — `€` no es carácter JS válido | Renombrar `fmtEuro`; validar con `node --check` antes de push |
+| L-057 | KPI IVA 0% = 0 aunque haya facturas | `parseFloat("0") \|\| null === null` (falsy trap) | `parseIvaPctDashboard()` con comprobación explícita |
+| L-058 | Fechas ordenadas mal | Comparación de strings "dd/mm/yyyy" | `parseFechaDashboard()` → timestamp ms |
+| L-059 | Trimestres en orden alfabético | Sin normalizar "Q1 2025" vs "Q1-2025" | `normalizarTrimestre()` + `sortTrimestresDesc()` |
+| L-060 | Columna Factura sustituye otras | `"RUTA_PDF"` dentro de colsShow original | Columna PDF SIEMPRE adicional, al final, con `getIdxFacturaPdf()` |
+| L-061 | clasp push falla en PowerShell | `clasp push` intenta .ps1 bloqueado | Siempre `clasp.cmd push` |
+| L-062 | `git status` da "index corrupt" | NTFS mount en sandbox Linux | Ejecutar git siempre desde PowerShell Windows |
+| L-063 | Regresiones llegan al dashboard publicado | Push antes de validar | Protocolo: diagnosticar → parche mínimo → validar → push → publicar → confirmar → commit |
+
+### Cabeceras reales del Sheet vs. claves del código
+
+El Sheet de producción usa nombres humanos. `buildIDX()` hace `.toUpperCase()` sin normalizar.
+
+| Clave interna | Nombres reales posibles |
+|---------------|-------------------------|
+| `NUM_FACTURA` | N Factura · Nº Factura · Numero Factura · Num Factura |
+| `BASE` | Base Imponible · Base EUR · Base |
+| `IVA_PCT` | IVA % · IVA% · % IVA · IVA PCT · IVA Porcentaje |
+| `IVA_EUR` | IVA EUR · IVA Euros · IVA € · Cuota IVA · Importe IVA |
+| `TOTAL` | Importe Total · Total EUR · Total Factura · Total con IVA |
+| `RUTA_PDF` | Ruta PDF (Drive) · Ruta PDF · URL PDF · Enlace PDF |
+
+**Regla:** Toda resolución de columna usa `getColIdx([...variantes...])`.
+
+### Script ID y configuración
+
+```
+Script ID: 1ZV3lEbhSqze0E7dnMyntXJuAlj6S4N7E3YEzAQ_qUOj7HFd4SI_t_1oE
+Directorio: C:\ClaudeProyectos\Bordagran\gmail-facturas-bordagran\dashboard
+Archivos:   .clasp.json, appsscript.json, Code.gs, Index.html, styles.html, scripts.html
+```
