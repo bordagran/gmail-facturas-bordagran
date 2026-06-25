@@ -37,3 +37,8 @@ scripts/*.bak
 runtime/diagnostico_*.txt
 runtime/dryrun_*.txt
 runtime/duplicados_*.csv
+
+# Historico dry-run v3.4.0
+runtime/historico_facturas_dryrun.json
+runtime/proveedores_candidatos.csv
+runtime/tipos_documento_candidatos.csv
