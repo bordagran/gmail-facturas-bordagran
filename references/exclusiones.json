@@ -22,10 +22,22 @@
     "motivo": "No proveedor - impuesto/tramite no imputable a Bordagran",
     "accion": "no_insertar_facturas",
     "notas": "DIPGRA segundo remitente (no_responder.tributos). Misma exclusion que info_tributos@dipgra.es. v3.2.0 L-042."
-  },  {
+  },
+  {
     "email": "notificaciones-bbva@bbva.com",
-    "motivo": "Entidad bancaria \u2014 justificantes/movimientos no son facturas de proveedor",
+    "motivo": "Entidad bancaria — justificantes/movimientos no son facturas de proveedor",
     "accion": "no_insertar_facturas",
     "notas": "BBVA envia notificaciones bancarias (movimientos, domiciliaciones, avisos). Nunca factura fiscal de proveedor. v3.2.0 L-050."
+  },
+  {
+    "email": "",
+    "palabras_clave": [
+      "escuelaartegranada",
+      "escuela arte granada",
+      "escuela de arte granada"
+    ],
+    "motivo": "No proveedor / no cliente - documentos Escuela de Arte Granada",
+    "accion": "no_insertar_facturas",
+    "notas": "Documentos de Escuela de Arte Granada (nums TEMP-...) no imputables fiscalmente a Bordagran. Excluir de historico, dashboard y candidatos. v3.4.0."
   }
 ]

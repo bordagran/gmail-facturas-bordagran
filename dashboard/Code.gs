@@ -19,12 +19,11 @@ var HOJA_MAESTRO  = "MAESTRO_PROVEEDORES";
  * Punto de entrada principal del Web App.
  * Solo devuelve HTML — no modifica ningún dato.
  */
-function doGet(e) {
+function doGet() {
   return HtmlService
     .createTemplateFromFile("Index")
     .evaluate()
-    .setTitle("Dashboard Fiscal Bordagran")
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.DENY);
+    .setTitle("Dashboard Fiscal Bordagran");
 }
 
 
@@ -138,6 +137,40 @@ function getResumen() {
     if (key) maestroMap[key] = m;
   });
 
+  // ── Exclusión visual v3.4.0 ──────────────────────────────────
+  // Proveedores que NO deben aparecer en KPIs, alertas ni ranking.
+  // No borra filas del Sheet. Solo filtra en memoria antes de calcular.
+  // Cubre ESCUELAARTEGRANADA y cualquier entrada con estado "Excluido"
+  // en MAESTRO_PROVEEDORES, más las variantes de nombre hard-coded.
+  var _EXCLUIDOS_VISUAL = [
+    "escuelaartegranada",
+    "escuelaartegranadada",   // typo defensivo
+    "escuelaartegranada",
+    "escuelaartegranada",
+  ];
+  // Añadir entradas Excluido del Maestro dinámicamente
+  Object.keys(maestroMap).forEach(function(k) {
+    var ev = String(
+      maestroMap[k]["Estado validación proveedor"] ||
+      maestroMap[k]["Estado validacion proveedor"] || ""
+    ).trim().toLowerCase();
+    if (ev === "excluido") { _EXCLUIDOS_VISUAL.push(k); }
+  });
+  function _esExcluidoVisual(nombreProv) {
+    var norm = nombreProv.toLowerCase().replace(/\s+/g, "");
+    // Variantes con "de" y sin "de"
+    var variantes = [
+      norm,
+      norm.replace("dearte", "arte"),   // "escueladeartegranada" -> "escuelaartegranada"
+      norm.replace("escueladearte", "escuelaarte")
+    ];
+    for (var vi = 0; vi < variantes.length; vi++) {
+      if (_EXCLUIDOS_VISUAL.indexOf(variantes[vi]) >= 0) return true;
+    }
+    return false;
+  }
+  // ── Fin exclusión visual ──────────────────────────────────────
+
   // KPIs
   var totalFacturas    = 0;
   var sumaBase         = 0;
@@ -161,6 +194,10 @@ function getResumen() {
 
   rows.forEach(function(row, i) {
     if (!row[idxProv] && !row[idxTotal]) return; // fila vacía
+
+    // v3.4.0: excluir visualmente antes de KPIs, alertas y ranking
+    var _provCheck = String(row[idxProv] || "").trim();
+    if (_esExcluidoVisual(_provCheck)) return;
 
     totalFacturas++;
 

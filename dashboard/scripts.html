@@ -32,6 +32,31 @@ window.addEventListener("load", function() {
   cargarDatos();
 });
 
+// ─────────────────────────────────────────────────────────────
+// EXCLUSIÓN VISUAL CLIENTE v3.4.0
+// Proveedores que nunca deben aparecer en el dashboard:
+//   ESCUELAARTEGRANADA / ESCUELA ARTE GRANADA / ESCUELA DE ARTE GRANADA
+// No borra filas del Sheet. Solo filtra en memoria antes de cualquier render.
+// ─────────────────────────────────────────────────────────────
+var _EXCLUIDOS_CLIENTE = [
+  "escuelaartegranada"
+];
+
+function esExcluidoVisualCliente(nombreProv) {
+  if (!nombreProv) return false;
+  // Normalizar: minúsculas, sin tildes, sin espacios
+  var n = nombreProv.toLowerCase()
+    .replace(/á/g,"a").replace(/é/g,"e").replace(/í/g,"i")
+    .replace(/ó/g,"o").replace(/ú/g,"u").replace(/ü/g,"u")
+    .replace(/\s+/g, "");
+  // Variante colapsando "de": "escueladeartegranada" -> "escuelaartegranada"
+  var nSinDe = n.replace("dearte","arte").replace("escueladearte","escuelaarte");
+  for (var i = 0; i < _EXCLUIDOS_CLIENTE.length; i++) {
+    if (n === _EXCLUIDOS_CLIENTE[i] || nSinDe === _EXCLUIDOS_CLIENTE[i]) return true;
+  }
+  return false;
+}
+
 function cargarDatos() {
   mostrarLoading(true);
   // Llamar a las dos funciones del servidor en paralelo
@@ -39,7 +64,13 @@ function cargarDatos() {
     .withSuccessHandler(function(res) {
       if (res.error) { mostrarError(res.error); return; }
       STATE.headers  = res.headers;
-      STATE.facturas = res.rows;
+      // v3.4.0: excluir proveedores visualmente antes de cualquier render
+      var _idxProv = (res.headers || []).map(function(h){ return h.toUpperCase(); })
+                      .indexOf("PROVEEDOR");
+      STATE.facturas = (res.rows || []).filter(function(row) {
+        var prov = _idxProv >= 0 ? String(row[_idxProv] || "").trim() : "";
+        return !esExcluidoVisualCliente(prov);
+      });
       buildIDX(res.headers);
       populateFiltros();
 
