@@ -63,7 +63,8 @@ function cargarDatos() {
   google.script.run
     .withSuccessHandler(function(res) {
       if (res.error) { mostrarError(res.error); return; }
-      STATE.headers  = res.headers;
+      STATE.headers   = res.headers;
+      STATE.debugUrls = res.debug_urls || 0;  // URLs PDF detectadas por Code.gs
       // v3.4.0: excluir proveedores visualmente antes de cualquier render
       var _idxProv = (res.headers || []).map(function(h){ return h.toUpperCase(); })
                       .indexOf("PROVEEDOR");
@@ -185,35 +186,108 @@ function renderAlertas(alertas) {
 // TABLA DE FACTURAS
 // ─────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────
+// DETECCIÓN ROBUSTA DE COLUMNA PDF
+// Maneja variantes de nombre: "Ruta PDF (Drive)", "RUTA_PDF",
+// "Ruta PDF", "URL_PDF", "Enlace", "Link", etc.
+// ─────────────────────────────────────────────────────────────
+function getIdxFacturaPdf() {
+  var posibles = [
+    "RUTA_PDF", "RUTA PDF", "RUTA PDF (DRIVE)", "RUTA_PDF_(DRIVE)",
+    "PDF", "URL_PDF", "URL PDF", "ENLACE_PDF", "ENLACE PDF",
+    "FACTURA_PDF", "FACTURA PDF", "LINK", "ENLACE", "DRIVE", "ARCHIVO"
+  ];
+  for (var i = 0; i < posibles.length; i++) {
+    if (IDX[posibles[i]] !== undefined) {
+      console.log("[Dashboard] Columna PDF encontrada:", posibles[i], "-> idx", IDX[posibles[i]]);
+      return IDX[posibles[i]];
+    }
+  }
+  console.warn("[Dashboard] Columna PDF NO encontrada. IDX disponibles:", Object.keys(IDX));
+  return -1;
+}
+
 function renderTablaFacturas(rows) {
   var headers = STATE.headers;
   if (!headers.length) return;
 
-  // Columnas a mostrar (subconjunto legible)
-  var colsShow = ["FECHA", "TRIMESTRE", "PROVEEDOR", "NUM_FACTURA", "BASE", "IVA_PCT", "IVA_EUR", "TOTAL", "ESTADO", "NOTAS"];
-  var indices = colsShow.map(function(c) { return IDX[c]; }).filter(function(i) { return i !== undefined; });
+  // ── Resolver índice probando múltiples variantes de nombre ───────────────
+  function getColIdx(candidates) {
+    for (var ci = 0; ci < candidates.length; ci++) {
+      if (IDX[candidates[ci]] !== undefined) return IDX[candidates[ci]];
+    }
+    return undefined;
+  }
+
+  // Índices de columnas especiales (formateo de celdas)
+  var idxEstado     = getColIdx(["ESTADO", "ESTADO FACTURA", "STATUS"]);
+  var idxBase       = getColIdx(["BASE", "BASE IMPONIBLE", "BASE_IMPONIBLE", "BASE EUR", "IMPORTE BASE"]);
+  var idxIvaEur     = getColIdx(["IVA_EUR", "IVA EUR", "IVA EUROS", "IVA €", "CUOTA IVA", "IMPORTE IVA"]);
+  var idxTotal      = getColIdx(["TOTAL", "IMPORTE TOTAL", "TOTAL EUR", "TOTAL FACTURA", "TOTAL CON IVA"]);
+  var idxIvaPct     = getColIdx(["IVA_PCT", "IVA %", "IVA%", "% IVA", "IVA PCT", "IVA PORCENTAJE", "TIPO IVA"]);
+  var idxNumFactura = getColIdx(["NUM_FACTURA", "N FACTURA", "Nº FACTURA", "N° FACTURA",
+                                  "NUMERO FACTURA", "NÚMERO FACTURA", "NUM FACTURA",
+                                  "N_FACTURA", "NUMERO_FACTURA", "N.FACTURA", "FACTURA"]);
+
+  // Columna virtual inyectada por Code.gs con la URL real del PDF.
+  // Acceso directo al IDX (la clave es siempre "URL_FACTURA_DASHBOARD" en mayúsculas).
+  // Fallback: buscar la columna real "Ruta PDF (Drive)" con getIdxFacturaPdf().
+  var idxPdf = (IDX["URL_FACTURA_DASHBOARD"] !== undefined)
+               ? IDX["URL_FACTURA_DASHBOARD"]
+               : getIdxFacturaPdf();
+
+  // Columnas a mostrar — multi-variante para compatibilidad con cualquier cabecera del Sheet
+  var indices = [
+    getColIdx(["FECHA", "FECHA FACTURA", "FECHA EMISION", "FECHA_EMISION", "FECHA_FACTURA"]),
+    getColIdx(["TRIMESTRE", "TRIMESTRE FISCAL", "TRIMESTRE_FISCAL"]),
+    getColIdx(["PROVEEDOR", "NOMBRE PROVEEDOR", "NOMBRE_PROVEEDOR", "EMISOR"]),
+    idxNumFactura,
+    getColIdx(["CONCEPTO", "DESCRIPCION", "DESCRIPCION FACTURA", "DESCRIPCIÓN"]),
+    idxBase,
+    idxIvaPct,
+    idxIvaEur,
+    idxTotal,
+    idxEstado,
+    getColIdx(["NOTAS", "OBSERVACIONES", "COMENTARIOS", "NOTAS ADICIONALES"])
+  ].filter(function(i) { return i !== undefined; });
+
+  var totalCols = indices.length;  // Sin columna extra "Factura"
 
   var html = '<table><thead><tr>';
-  indices.forEach(function(i, n) {
+  indices.forEach(function(i) {
     html += '<th onclick="sortByCol(' + i + ')">' + esc(headers[i]) + '</th>';
   });
   html += '</tr></thead><tbody>';
 
   if (!rows.length) {
-    html += '<tr><td colspan="' + indices.length + '" style="text-align:center;padding:20px;color:var(--color-muted)">Sin resultados para los filtros seleccionados.</td></tr>';
+    html += '<tr><td colspan="' + totalCols + '" style="text-align:center;padding:20px;color:var(--color-muted)">Sin resultados para los filtros seleccionados.</td></tr>';
   } else {
     rows.forEach(function(row) {
-      var estado = String(row[IDX["ESTADO"]] || "").trim();
       html += '<tr>';
       indices.forEach(function(i) {
         var val = row[i];
-        if (i === IDX["ESTADO"]) {
+        if (i === idxNumFactura) {
+          // Nº Factura: enlazar al PDF si hay URL válida
+          var numFact = String(val !== null && val !== undefined ? val : "").trim();
+          var pdfRaw  = (idxPdf >= 0) ? String(row[idxPdf] || "").trim() : "";
+          var tieneUrl = /^https?:\/\//i.test(pdfRaw);
+          if (tieneUrl && numFact) {
+            html += '<td><a href="' + esc(pdfRaw) + '" target="_blank" rel="noopener" ' +
+                    'style="color:var(--color-primary)">' + esc(numFact) + '</a></td>';
+          } else if (tieneUrl) {
+            html += '<td><a href="' + esc(pdfRaw) + '" target="_blank" rel="noopener" ' +
+                    'style="color:var(--color-primary)">Ver factura</a></td>';
+          } else {
+            html += '<td>' + esc(numFact || "\u2014") + '</td>';
+          }
+        } else if (i === idxEstado) {
           html += '<td>' + badgeEstado(String(val || "")) + '</td>';
-        } else if (i === IDX["BASE"] || i === IDX["IVA_EUR"] || i === IDX["TOTAL"]) {
-          var n = parseFloat(val) || 0;
+        } else if (i === idxBase || i === idxIvaEur || i === idxTotal) {
+          var n = parseFloat(String(val || "").replace(",", ".")) || 0;
           html += '<td style="text-align:right">' + fmtEuro(n) + '</td>';
-        } else if (i === IDX["IVA_PCT"]) {
-          html += '<td style="text-align:right">' + (val !== "" && val !== null ? val + "%" : "—") + '</td>';
+        } else if (i === idxIvaPct) {
+          var pval = (val !== "" && val !== null && val !== undefined) ? val + "%" : "\u2014";
+          html += '<td style="text-align:right">' + esc(String(pval)) + '</td>';
         } else {
           html += '<td>' + esc(String(val !== null && val !== undefined ? val : "")) + '</td>';
         }
@@ -224,7 +298,23 @@ function renderTablaFacturas(rows) {
 
   html += '</tbody></table>';
   document.getElementById("tabla-facturas").innerHTML = html;
-  document.getElementById("tabla-count").textContent = rows.length + " facturas";
+
+  // Contar URLs PDF reales en las filas visibles
+  var urlsVisibles = rows.filter(function(r) {
+    var v = (idxPdf >= 0) ? String(r[idxPdf] || "").trim() : "";
+    return /^https?:\/\//i.test(v);
+  }).length;
+
+  var debugTxt = rows.length + " facturas";
+  if (idxPdf >= 0) {
+    debugTxt += " | PDF: " + urlsVisibles + "/" + rows.length;
+    if (urlsVisibles === 0) {
+      debugTxt += " (sin URL — revisa columna Ruta PDF en Sheet)";
+    }
+  } else {
+    debugTxt += " | PDF: columna no detectada";
+  }
+  document.getElementById("tabla-count").textContent = debugTxt;
 }
 
 function badgeEstado(estado) {

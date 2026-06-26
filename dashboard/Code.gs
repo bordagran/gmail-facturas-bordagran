@@ -37,9 +37,32 @@ function include(filename) {
 
 
 /**
+ * Normaliza una cabecera de columna para comparación robusta.
+ * Mayúsculas, sin tildes, sin caracteres especiales, espacios normalizados.
+ * Ejemplo: "Ruta PDF (Drive)" → "RUTA PDF DRIVE"
+ * SOLO LECTURA — función pura.
+ */
+function normHdrGs_(txt) {
+  return String(txt || "").toUpperCase()
+    .replace(/[ÁÀÄÂ]/g,"A").replace(/[ÉÈËÊ]/g,"E")
+    .replace(/[ÍÌÏÎ]/g,"I").replace(/[ÓÒÖÔ]/g,"O")
+    .replace(/[ÚÙÜÛ]/g,"U").replace(/Ñ/g,"N")
+    .replace(/[^A-Z0-9]+/g," ").trim();
+}
+
+
+/**
  * Lee todas las filas de FACTURA PROVEEDORES.
- * Devuelve { headers: [...], rows: [[...], ...] }
- * SOLO LECTURA — solo usa getValues().
+ * Devuelve { headers: [...], rows: [[...], ...], debug_urls: N }
+ *
+ * Añade columna virtual URL_FACTURA_DASHBOARD (no existe en el Sheet).
+ * Para cada fila, busca la URL del PDF en este orden:
+ *   1. Valor texto directo que empiece por http (columnas Ruta PDF)
+ *   2. Hipervínculo en rich text (getRichTextValues)
+ *   3. Fórmula HYPERLINK (getFormulas)
+ *   4. Mismo proceso en columna Nº Factura (por si el enlace está ahí)
+ *
+ * SOLO LECTURA — solo usa getValues, getRichTextValues, getFormulas.
  */
 function getFacturas() {
   try {
@@ -47,14 +70,70 @@ function getFacturas() {
     var sheet = ss.getSheetByName(HOJA_FACTURAS);
     if (!sheet) return { error: "Pestaña '" + HOJA_FACTURAS + "' no encontrada." };
 
-    var data = sheet.getDataRange().getValues();
+    var range = sheet.getDataRange();
+    var data  = range.getValues();
     if (!data || data.length < 2) return { headers: [], rows: [] };
 
+    // Leer fuentes adicionales para extraer hipervínculos (solo lectura)
+    var rich, formulas;
+    try { rich     = range.getRichTextValues(); } catch(e) { rich     = null; }
+    try { formulas = range.getFormulas();       } catch(e) { formulas = null; }
+
     var headers = data[0].map(function(h) { return String(h).trim(); });
-    var rows    = data.slice(1).map(function(row) {
-      return row.map(function(cell) {
+
+    // Localizar columna "Ruta PDF (Drive)" o cualquier variante.
+    // Usa subcadena sobre el header normalizado para máxima tolerancia:
+    //   "Ruta PDF (Drive)" → norm → "RUTA PDF DRIVE" → contiene "RUTA PDF" → encontrado
+    //   "Ruta PDF"         → norm → "RUTA PDF"        → contiene "RUTA PDF" → encontrado
+    //   "URL PDF"          → norm → "URL PDF"          → contiene "URL PDF"  → encontrado
+    var PDF_KEYWORDS = ["RUTA PDF", "URL PDF", "ENLACE PDF", "FACTURA PDF", "RUTA DRIVE"];
+    var idxRuta = -1;
+    for (var c = 0; c < headers.length; c++) {
+      var hn = normHdrGs_(headers[c]);
+      for (var k = 0; k < PDF_KEYWORDS.length; k++) {
+        if (hn.indexOf(PDF_KEYWORDS[k]) >= 0) { idxRuta = c; break; }
+      }
+      if (idxRuta >= 0) break;
+    }
+
+    // Extrae URL de una celda: texto plano → rich text link → fórmula HYPERLINK
+    function extractUrl_(ri, ci) {
+      // 1. Valor texto directo
+      var val = String(data[ri][ci] === null || data[ri][ci] === undefined ? "" : data[ri][ci]).trim();
+      if (/^https?:\/\//i.test(val)) return val;
+
+      // 2. Rich text hipervínculo (getRichTextValues)
+      if (rich && rich[ri] && rich[ri][ci]) {
+        try {
+          var rtv = rich[ri][ci];
+          var lu = rtv.getLinkUrl();
+          if (lu && /^https?:\/\//i.test(lu)) return lu;
+          var runs = rtv.getRuns ? rtv.getRuns() : [];
+          for (var r = 0; r < runs.length; r++) {
+            var ru = runs[r].getLinkUrl ? runs[r].getLinkUrl() : null;
+            if (ru && /^https?:\/\//i.test(ru)) return ru;
+          }
+        } catch(e) {}
+      }
+
+      // 3. Fórmula HYPERLINK: =HYPERLINK("https://...","texto") — sep , o ;
+      if (formulas && formulas[ri] && formulas[ri][ci]) {
+        var f = String(formulas[ri][ci]);
+        var m = f.match(/=HYPERLINK\s*\(\s*["']([^"']+)["']/i);
+        if (m && /^https?:\/\//i.test(m[1])) return m[1];
+      }
+
+      return "";
+    }
+
+    var VIRTUAL_HDR = "URL_FACTURA_DASHBOARD";
+    var urlsDetectadas = 0;
+
+    var rows = data.slice(1).map(function(row, ri) {
+      var rowIdx = ri + 1; // +1 por la fila de cabecera
+
+      var mappedRow = row.map(function(cell) {
         if (cell instanceof Date) {
-          // Formatear fecha como dd/mm/aaaa para visualización
           var d = cell;
           return (
             ("0" + d.getDate()).slice(-2) + "/" +
@@ -64,9 +143,18 @@ function getFacturas() {
         }
         return cell;
       });
+
+      var url = (idxRuta >= 0) ? extractUrl_(rowIdx, idxRuta) : "";
+      if (url) urlsDetectadas++;
+      mappedRow.push(url);
+      return mappedRow;
     });
 
-    return { headers: headers, rows: rows };
+    return {
+      headers: headers.concat([VIRTUAL_HDR]),
+      rows: rows,
+      debug_urls: urlsDetectadas
+    };
   } catch (ex) {
     return { error: String(ex) };
   }
