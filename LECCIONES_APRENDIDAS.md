@@ -1047,6 +1047,39 @@ Criterio incorrecto: el nombre del titular no determina la procedencia fiscal de
 - Genera concepto: "Telecomunicaciones DIGI — periodo FECHA1 - FECHA2"
 - Genera notas: "Proveedor DIGI validado por criterio fiscal de Juan."
 - Añadido en `maestro_proveedores_seed.json` con `estado_defecto: Registrada`
-- Búsqueda Gmail: `(from:digimobil.es OR "DIGI Spain Telecom" OR "DGFC") has:attachment filename:pdf`
+---
 
-**Archivos afectados:** `scripts/procesar_facturas.py`, `references/maestro_proveedores_seed.json`, `CLAUDE.md`, `SKILL.md`
+## L-065 — 2026-06-29 | Fechas europeas en PDFs bilingues: pdfplumber puede añadir espacios en separadores
+
+**Problema detectado:**
+Factura de GOR Factory con fecha `11/05/2026` (11 de mayo, formato europeo dd/mm/yyyy)
+aparecia clasificada en Q4-2026 (noviembre) en el Sheet FACTURA PROVEEDORES.
+
+**Causa raiz:**
+La funcion `_extraer_datos_factura_bilingue()` usa regex para capturar la fecha del PDF.
+La regex original `r"Fecha\s*/\s*Date[:\s]+(\d{1,2}/\d{2}/\d{2,4})"` NO captura
+cuando pdfplumber extrae la fecha con espacios alrededor de los slashes:
+`"Fecha / Date: 11 / 05 / 2026"` -- la regex falla.
+
+Consecuencia: `datos["fecha"]` queda vacio. `escribir_fila()` usa como fallback la
+fecha del correo electronico (email RFC 2822). Si el email fue recibido en noviembre,
+la fecha almacenada en el Sheet es noviembre -> Q4.
+
+**Regla permanente:**
+- Nunca asumir que pdfplumber produce fechas con separadores sin espacios.
+- Siempre probar con variantes: `11/05/2026`, `11 / 05 / 2026`, `11.05.2026`.
+- La regex de fecha DEBE tolerar espacios opcionales alrededor de separadores.
+- Cuando `datos["fecha"]` venga del email y no del PDF, logear [FECHA WARN] nivel WARN.
+
+**Solucion implementada (v3.4.6):**
+1. `parsear_fecha_espanola(fecha_str, contexto)` -- funcion explicita dd/mm que tolera
+   espacios en separadores y separadores alternativos (. - /).
+2. Regex ampliada en `_extraer_datos_factura_bilingue()` con 5 patrones en orden de preferencia.
+3. Fallback adicional en bloque GOR Factory: si fecha sigue vacia, busca cualquier patron
+   `\d{1,2}/\d{2}/\d{4}` en el texto del PDF antes de caer al email.
+4. `escribir_fila()` emite `[FECHA WARN]` cuando usa fecha email como fallback.
+5. Script `scripts/corregir_fecha_gor.py` para corregir la fila existente en el Sheet.
+
+**Archivos modificados:**
+- `scripts/procesar_facturas.py` (parsear_fecha_espanola, bilingue regex, fallback GOR, escribir_fila)
+- `scripts/corregir_fecha_gor.py` (nuevo -- correccion de la fila existente)

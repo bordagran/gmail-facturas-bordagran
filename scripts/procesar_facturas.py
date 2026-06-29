@@ -223,6 +223,54 @@ def calcular_trimestre(fecha: datetime) -> str:
     return f"Q{(fecha.month - 1) // 3 + 1}-{fecha.year}"
 
 
+def parsear_fecha_espanola(fecha_str: str, contexto: str = ""):
+    """
+    Parser de fechas europeo estricto (dd/mm/yyyy o dd/mm/yy).
+    Interpreta el primer numero como DIA, el segundo como MES (L-065).
+    Mas explicito que dateparser.parse(..., dayfirst=True) para PDFs bilingues.
+
+    Soporta separadores: / - .
+    Ignora espacios alrededor del separador ("11 / 05 / 2026" -> May 11).
+    Fallback a dateparser(dayfirst=True) para formatos RFC, texto libre, etc.
+    """
+    if not fecha_str:
+        return None
+    s = str(fecha_str).strip()
+
+    # Patron explicito: d{1,2} SEP d{1,2} SEP d{2,4} (con posibles espacios alrededor)
+    m = re.match(r'^(\d{1,2})\s*[/\-.]\ *\s*(\d{1,2})\s*[/\.\-]\s*(\d{2,4})$', s)
+    if not m:
+        # Sin anclas: buscar dentro del string (ej: fecha en medio de texto)
+        m = re.search(r'(\d{1,2})\s*[/\.\-]\s*(\d{1,2})\s*[/\.\-]\s*(\d{4})', s)
+    if m:
+        try:
+            dia  = int(m.group(1))
+            mes  = int(m.group(2))
+            anio = int(m.group(3))
+            if anio < 100:
+                anio += 2000
+            if 1 <= dia <= 31 and 1 <= mes <= 12:
+                try:
+                    dt = datetime(anio, mes, dia)
+                    if contexto:
+                        log(f"  [FECHA-ES] {s!r} -> {dt.strftime('%Y-%m-%d')} dd/mm [{contexto}]")
+                    return dt
+                except ValueError:
+                    pass
+        except (ValueError, AttributeError):
+            pass
+
+    # Fallback: dateparser con dayfirst=True (formatos RFC email, texto libre, etc.)
+    try:
+        dt = dateparser.parse(s, dayfirst=True)
+        if dt:
+            return dt
+    except Exception:
+        pass
+
+    return None
+
+
 def hash_pdf(ruta: str) -> str:
     sha = hashlib.sha256()
     with open(ruta, "rb") as f:
@@ -937,14 +985,21 @@ def _extraer_datos_factura_bilingue(texto: str) -> dict:
                 resultado["num_factura"] = candidato
                 break
 
-    # Fecha: "Fecha / Date: DD/MM/YY" (puede ser 2 digitos de año)
+    # Fecha: "Fecha / Date: DD/MM/YY" (puede ser 2 digitos de anio)
+    # L-065: patrones ampliados para pdfplumber con espacios en separadores
     for pat_fecha in [
-        r"Fecha\s*/\s*Date[:\s]+(\d{1,2}/\d{2}/\d{2,4})",
-        r"Date[:\s]+(\d{1,2}/\d{2}/\d{2,4})",
+        r"Fecha\s*/\s*Date[:\s]+(\d{1,2}/\d{2}/\d{2,4})",      # normal
+        r"Date[:\s]+(\d{1,2}/\d{2}/\d{2,4})",                    # solo ingles
+        r"Fecha\s*/\s*Date[:\s]+(\d{1,2}\s*/\s*\d{2}\s*/\s*\d{2,4})",  # espacios en slashes
+        r"Date[:\s]+(\d{1,2}\s*/\s*\d{2}\s*/\s*\d{2,4})",    # ingles con espacios
+        r"Fecha\s*/\s*Date[:\s]+(\d{1,2}[\-.])\s*(\d{2}[\-.]\d{2,4})",   # separadores . o -
     ]:
         m = re.search(pat_fecha, texto, re.IGNORECASE)
         if m:
-            resultado["fecha"] = m.group(1)
+            # Normalizar: quitar espacios alrededor de separadores
+            raw = "".join(m.groups()) if m.lastindex and m.lastindex > 1 else m.group(1)
+            raw = re.sub(r'\s*([/\.\-])\s*', r'\1', raw).strip()
+            resultado["fecha"] = raw
             break
 
     # Total fiscal: "TOTAL / TOTAL AMOUNT" o "TOTAL AMOUNT" (puede ser multilinea)
@@ -1257,6 +1312,15 @@ def extraer_datos_pdf(ruta: str) -> dict:
             if _gor.get("iva_pct") is not None:
                 datos["iva_pct"] = _gor["iva_pct"]
             log(f"  [GOR] parser bilingue: num={datos.get('num_factura')!r} total={datos.get('total')} base={datos.get('base')}")
+            # L-065: fallback fecha GOR -- si bilingue no capturo, buscar en texto raw
+            if not datos.get("fecha") and t:
+                _m_gf = re.search(
+                    r"(\d{1,2})\s*[/.]\s*(\d{1,2})\s*[/.]\s*(\d{4})", t
+                )
+                if _m_gf:
+                    _gf_raw = f"{_m_gf.group(1)}/{_m_gf.group(2)}/{_m_gf.group(3)}"
+                    datos["fecha"] = _gf_raw
+                    log(f"  [GOR L-065] fecha por fallback regex en PDF: {_gf_raw!r}")
 
         # OKTextil / Textil 50-50 especifico (ESB02258614)
         # Misma estructura bilingue FACTURA/INVOICE que GOR
@@ -1601,12 +1665,17 @@ def verificar_headers(sheet):
 
 
 def escribir_fila(sheet, datos_email: dict, datos_pdf: dict, extras: dict):
-    fecha = datos_pdf.get("fecha") or datos_email.get("fecha_email", "")
-    # Calcular trimestre y normalizar fecha a ISO (L-034)
+    fecha_pdf   = datos_pdf.get("fecha", "")
+    fecha_email = datos_email.get("fecha_email", "")
+    fecha = fecha_pdf or fecha_email
+    if not fecha_pdf and fecha_email:
+        log("  [FECHA WARN] Sin fecha en PDF: usando fecha del correo como fallback. "
+            "Verificar manualmente que el trimestre es correcto. (L-065)", "WARN")
+    # Calcular trimestre y normalizar fecha a ISO (L-034, L-065)
     trimestre = ""
     fecha_iso = ""
     try:
-        dt = dateparser.parse(fecha, dayfirst=True)
+        dt = parsear_fecha_espanola(fecha, contexto="escribir_fila")
         if dt:
             trimestre = calcular_trimestre(dt)
             fecha_iso = dt.strftime("%Y-%m-%d")
@@ -2420,7 +2489,7 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
                     trimestre_str = ""
                     if datos_pdf.get("fecha"):
                         try:
-                            dt = dateparser.parse(datos_pdf["fecha"], dayfirst=True)
+                            dt = parsear_fecha_espanola(datos_pdf["fecha"], "trimestre_drive")
                             if dt:
                                 trimestre_str = calcular_trimestre(dt)
                         except Exception:
@@ -2432,7 +2501,7 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
                     fecha_norm = datetime.now().strftime("%Y-%m-%d")
                     if datos_pdf.get("fecha"):
                         try:
-                            dt = dateparser.parse(datos_pdf["fecha"], dayfirst=True)
+                            dt = parsear_fecha_espanola(datos_pdf["fecha"], "fecha_drive")
                             if dt:
                                 fecha_norm = dt.strftime("%Y-%m-%d")
                         except Exception:
