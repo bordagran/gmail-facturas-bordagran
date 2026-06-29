@@ -219,6 +219,17 @@ python scripts/detectar_duplicados_sheet.py --skill-dir .
 - Numero de factura: formato `2026/AA/NNNNNN` (slash entre letras y digitos opcional).
 - Parser: `_extraer_datos_radiokable()`. SIEMPRE desde PDF adjunto, no cuerpo email (L-043).
 
+### DIGI Spain Telecom, S.A.U. (`from:digimobil.es`)
+- NIF proveedor: A84919760. Número factura: patrón DGFC + dígitos (ej: DGFC2617783077).
+- Parser: `_extraer_datos_digi()`. Keywords de activación: "digi", "dgfc", "digimobil".
+- Extrae: Fecha de emisión, periodo de consumo, base imponible, IVA (21%), total factura.
+- Concepto generado: "Telecomunicaciones DIGI — periodo FECHA1 - FECHA2".
+- **Criterio fiscal Juan (L-064)**: Facturas emitidas a nombre de Elizabeth Vicci son
+  fiscalmente procedentes para Bordagran/autónoma. Estado `Registrada` si extracción completa.
+  NO marcar `Revisar` por el nombre del titular. NIF/NIE personal NO guardar en repo.
+- Búsqueda Gmail: `(from:digimobil.es OR "DIGI Spain Telecom" OR "DGFC") has:attachment filename:pdf`
+
+
 ### Felt S.L. (`felt@textil.org`)
 - Numero formato `260.193`. Fechas en espanol ("01 mayo 2026"). Parser: `_extraer_datos_felt()`.
 

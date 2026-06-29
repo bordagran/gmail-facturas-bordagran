@@ -1015,3 +1015,38 @@ publicado antes de detectarse.
 10. Añadir la lección a este archivo.
 
 **Archivos afectados:** `dashboard/scripts.html`, `dashboard/Code.gs`
+
+---
+
+## L-064 — 2026-06-29 | Criterio fiscal DIGI: titular Elizabeth Vicci es válido para Bordagran
+
+**Problema detectado:**
+Las facturas de DIGI Spain Telecom emitidas a nombre de Elizabeth Vicci
+se marcaban como `Revisar` porque el parser no encontraba "Bordagran" como titular.
+Criterio incorrecto: el nombre del titular no determina la procedencia fiscal de un gasto de autónomo.
+
+**Regla operativa permanente (confirmada por Juan):**
+- Proveedor: DIGI Spain Telecom, S.A.U. / NIF A84919760 / dominio digimobil.es
+- Titular fiscal válido: Elizabeth Vicci (autónoma / Bordagran)
+- Estado si extracción correcta: `Registrada`
+- Estado solo si faltan datos o hay incoherencia: `Revisar`
+- No marcar `Revisar` por el nombre del titular en la factura
+- NIF/NIE personal del titular NO guardar en fixtures, logs, repo ni tests
+
+**Datos patrón factura DIGI:**
+- Número: patrón DGFC + dígitos (ej: DGFC2617783077)
+- Fecha: campo "Fecha de emisión"
+- Base: campo "IMPORTE (base imponible)"
+- IVA: campo "IMPUESTOS (21.00% IVA)"
+- Total: campo "TOTAL FACTURA (imp. incl.)"
+- Tipo: telecomunicaciones
+
+**Solución implementada:**
+- Parser `_extraer_datos_digi()` añadido en `procesar_facturas.py`
+- Activación por keywords: "digi", "dgfc", "digimobil"
+- Genera concepto: "Telecomunicaciones DIGI — periodo FECHA1 - FECHA2"
+- Genera notas: "Proveedor DIGI validado por criterio fiscal de Juan."
+- Añadido en `maestro_proveedores_seed.json` con `estado_defecto: Registrada`
+- Búsqueda Gmail: `(from:digimobil.es OR "DIGI Spain Telecom" OR "DGFC") has:attachment filename:pdf`
+
+**Archivos afectados:** `scripts/procesar_facturas.py`, `references/maestro_proveedores_seed.json`, `CLAUDE.md`, `SKILL.md`

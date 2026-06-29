@@ -294,6 +294,23 @@
       "primera_deteccion": "2026-06-24",
       "ultima_deteccion": "2026-06-24",
       "notas": "Numeros tipo TEMP-... no son facturas fiscales. Excluir de historico, dashboard y candidatos. v3.4.0."
+    },
+    {
+      "proveedor_detectado": "DIGI Spain Telecom, S.A.U.",
+      "proveedor_normalizado": "DIGI Spain Telecom, S.A.U.",
+      "email_dominio": "digimobil.es",
+      "categoria": "Telecomunicaciones",
+      "tipo_fiscal": "Nacional con IVA",
+      "estado_defecto": "Registrada",
+      "proveedor_seguro": "Si",
+      "accion_automatica": "Registrar automaticamente si extraccion completa",
+      "estado_validacion": "Validado",
+      "validado_por": "Juan",
+      "fecha_validacion": "2026-06-29",
+      "criterio_validado": "Proveedor fiscal valido. Facturas emitidas a nombre de Elizabeth Vicci son fiscalmente procedentes para Bordagran/autonoma. No marcar Revisar por titular. L-064.",
+      "primera_deteccion": "2026-06-29",
+      "ultima_deteccion": "2026-06-29",
+      "notas": "NIF proveedor A84919760. Alias: DIGI, Digi Mobil, DIGI Spain Telecom, digimobil. Num factura patron DGFC seguido de digitos. IVA 21%. Titular Elizabeth Vicci aceptado fiscalmente. NIF/NIE personal del titular NO guardar en repo. v3.4.1."
     }
   ]
 }
