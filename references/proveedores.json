@@ -288,5 +288,15 @@
     "dominio": "vinilosyserigrafia.com",
     "activo": true,
     "_nota": "FIX 11 v3.1.0"
+  },
+  {
+    "nombre": "DIGI Spain Telecom, S.A.U.",
+    "emails": [
+      "digimobil"
+    ],
+    "matchType": "contains",
+    "dominio": "digimobil.es",
+    "activo": true,
+    "_nota": "L-064: facturas DGFC desde digimobil.no-reply@bulkmail.digimobil.es. Fiscal valido para Bordagran/autonoma. NIF A84919760."
   }
 ]

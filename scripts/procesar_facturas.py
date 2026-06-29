@@ -408,6 +408,35 @@ def identificar_proveedor(email: str, proveedores: list) -> dict:
     return {"nombre": dominio, "_desconocido": True, "email": email}
 
 
+def coincide_filtro_proveedor(filtro: str, prov_nombre: str, remitente: str, asunto: str) -> tuple:
+    """
+    Decide si el mensaje pasa el filtro --proveedor.
+    Devuelve (bool, str_motivo).
+    El filtro es case-insensitive. Para DIGI acepta tambien dominios/patrones digimobil.
+    """
+    if not filtro:
+        return True, "sin filtro"
+
+    f = filtro.lower().strip()
+    pnl = (prov_nombre or "").lower()
+    rem = (remitente or "").lower()
+    subj = (asunto or "").lower()
+
+    # Coincidencia generica: nombre del proveedor contiene el filtro
+    if f in pnl:
+        return True, f"nombre proveedor contiene '{filtro}'"
+
+    # Reglas especiales DIGI
+    if f in ("digi", "digimobil", "dgfc", "digi spain"):
+        if "digimobil" in rem:
+            return True, f"remitente contiene 'digimobil': {remitente}"
+        if "digi" in subj or "dgfc" in subj:
+            return True, f"asunto contiene DIGI/DGFC: {asunto[:60]}"
+        return False, f"DIGI: remitente={remitente!r} no contiene digimobil ni asunto DIGI/DGFC"
+
+    return False, f"'{filtro}' no encontrado en proveedor '{prov_nombre}'"
+
+
 # ─────────────────────────────────────────────────────────
 # EXCLUSIONES (clientes / no proveedores)
 # ─────────────────────────────────────────────────────────
@@ -1639,6 +1668,8 @@ def main():
                         help="Ignorar lock file de ejecuciones previas bloqueadas")
     parser.add_argument("--dry-run", action="store_true",
                         help="Simular sin escribir en Sheet/Drive/Gmail (modo seguro)")
+    parser.add_argument("--proveedor", default=None, metavar="NOMBRE",
+                        help="Filtrar por proveedor (ej: DIGI). Solo procesa emails del proveedor.")
     args = parser.parse_args()
 
     print(f"  Modo     : {args.modo}", flush=True)
@@ -1971,6 +2002,18 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
     maestro_data, sheet_maestro = cargar_maestro_proveedores(ss)
     fecha_hoy = datetime.now().strftime("%Y-%m-%d")
 
+    # L-064: DIGI validado localmente (fiscal valido para Bordagran/autonoma).
+    # Si ya esta en el Sheet -> el Sheet manda. Si no -> este fallback evita "MAESTRO NUEVO -> Revisar".
+    _digi_key = normalizar_texto("DIGI Spain Telecom, S.A.U.")
+    if _digi_key not in maestro_data:
+        maestro_data[_digi_key] = {
+            "proveedor detectado": "DIGI Spain Telecom, S.A.U.",
+            "estado validacion proveedor": "validado",
+            "accion automatica": "",
+            "notas": "L-064: Proveedor fiscal valido. Facturas DGFC. validado_por=Juan 2026-06-29",
+        }
+        log("[MAESTRO] DIGI inyectado localmente como validado (L-064)")
+
     # Label IDs
     label_procesadas_id = obtener_label_id(gmail, config["LABEL_PROCESADAS"])
     label_pendiente_id = obtener_label_id(gmail, config["LABEL_PENDIENTE"])
@@ -2045,6 +2088,16 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
                 es_desconocido = prov.get("_desconocido", False)
 
                 log(f"[{i+1}/{len(mensajes)}] {prov['nombre']} <{remitente}>")
+
+                # Filtro --proveedor: saltar emails de otro proveedor
+                if getattr(args, 'proveedor', None):
+                    _pasa, _motivo = coincide_filtro_proveedor(
+                        args.proveedor, prov['nombre'], remitente, meta.get('asunto', ''))
+                    if _pasa:
+                        log(f"  [FILTRO-OK] Aceptado por: {_motivo}")
+                    else:
+                        log(f"  [FILTRO] {prov['nombre']} omitido: {_motivo}")
+                        continue
 
                 # v3.2.1 L-052: Gate temprano GMAIL-PROPIO
                 # Si el remitente ES bordagran@gmail.com, el email proviene de la propia cuenta de Bordagran.
@@ -2276,6 +2329,24 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
                         tipo_doc = "factura"   # forzar paso por gate fiscal → estado Revisar
                         motivo_tipo = "Niba PDF ilegible — proveedor identificado (L-046)"
                         log(f"  [NIBA-ILEGIBLE] Gate: {datos_pdf['num_factura']}")
+                    # DIGI L-064: domiciliacion bancaria = metodo de pago, no aviso
+                    if (tipo_doc == "aviso_bancario"
+                            and str(datos_pdf.get("num_factura","")).upper().startswith("DGFC")
+                            and datos_pdf.get("base") is not None
+                            and datos_pdf.get("total") is not None
+                            and datos_pdf.get("fecha")):
+                        tipo_doc = "factura"
+                        motivo_tipo = "DIGI L-064: domiciliacion bancaria es metodo de pago"
+                        log(f"  [DIGI] Override aviso_bancario->factura: {datos_pdf['num_factura']}")
+                    # DIGI: normalizar proveedor si num_factura=DGFC y aun desconocido (L-064)
+                    if (str(datos_pdf.get("num_factura","")).upper().startswith("DGFC")
+                            and es_desconocido):
+                        prov = {
+                            "nombre": "DIGI Spain Telecom, S.A.U.",
+                            "email": remitente,
+                        }
+                        es_desconocido = False
+                        log(f"  [DIGI] Proveedor normalizado: DIGI Spain Telecom, S.A.U. (L-064)")
                     # ────────────────────────────────────────────────────────────
                     if tipo_doc not in TIPOS_FISCALES:
                         log(f"  [!] No fiscal [{tipo_doc}]: {motivo_tipo} | {nombre_pdf}")
