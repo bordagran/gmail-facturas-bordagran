@@ -817,3 +817,236 @@ clasifica el caso como `NIBA-ENLACE-{hash}` en pendientes.
 - Si se automatiza, usar secreto local efimero (variable de entorno en sesion, no en fichero).
 - Requisito previo: consentimiento explicito del usuario en cada ejecucion si hay DNI involucrado.
 
+
+---
+
+## L-055 — 2026-06-25 | Dashboard fiscal: cabeceras del Sheet con espacios vs. guiones bajos
+
+**Problema detectado:**
+`renderTablaFacturas()` buscaba `IDX["NUM_FACTURA"]`, `IDX["BASE"]`, `IDX["IVA_PCT"]` etc.
+(nombres con guión bajo). El Sheet usa cabeceras visibles con espacios: "N Factura",
+"Base Imponible", "IVA %", "IVA EUR", "Importe Total", "Ruta PDF (Drive)".
+`buildIDX` hace `h.toUpperCase()` sin normalizar guiones/espacios, así que
+`IDX["NUM_FACTURA"] === undefined` cuando el Sheet tiene "N Factura".
+Resultado: solo aparecían 4 columnas (FECHA, TRIMESTRE, PROVEEDOR, ESTADO).
+
+**Corrección:**
+Función `getColIdx(candidates)` dentro de `renderTablaFacturas()` que prueba
+múltiples variantes de nombre hasta encontrar la primera que existe en IDX.
+Función `getIdxFacturaPdf()` global con 11+ variantes para la columna de enlace PDF.
+
+**Regla operativa permanente:**
+> NUNCA asumir que el Sheet usa el mismo nombre interno que el código Python.
+> El Sheet puede tener "N Factura", "Base Imponible", "IVA %", "Ruta PDF (Drive)", etc.
+> Toda búsqueda de columna en el dashboard DEBE usar variantes múltiples.
+> Nunca una sola clave rígida IDX["CLAVE_CON_GUION_BAJO"] si la hoja tiene nombres humanos.
+
+**Archivos afectados:** `dashboard/scripts.html`
+
+---
+
+## L-056 — 2026-06-25 | Dashboard fiscal: `fmt€` es identificador JS inválido
+
+**Problema detectado:**
+La función `fmt€` usaba el carácter `€` (U+20AC, categoría Unicode Sc «Currency Symbol»)
+en su nombre. ECMAScript no permite Sc como carácter de identificador.
+Node.js v22, Acorn ES2020 y V8 (Apps Script) la rechazan.
+El error estaba enmascarado por la caché del navegador; al hacer `clasp push` y limpiar
+caché, el dashboard quedó en "Cargando datos de Google Sheets…" con
+`SyntaxError: missing ) after argument list` en consola.
+
+**Corrección:** Renombrar `fmt€` → `fmtEuro` en todas las ocurrencias (1 definición + N llamadas).
+
+**Regla operativa permanente:**
+> Nunca usar caracteres no-ASCII en nombres de funciones JavaScript del dashboard.
+> Antes de cualquier `clasp push`, validar con:
+>   `node --check` sobre el JS extraído del HTML, O
+>   extracción previa con Python + `node --check /tmp/check.js`
+> Si el dashboard queda en "Cargando…", abrir consola del navegador (F12) y buscar SyntaxError.
+
+**Archivos afectados:** `dashboard/scripts.html`
+
+---
+
+## L-057 — 2026-06-25 | Dashboard fiscal: IVA 0% falsy trap con parseFloat
+
+**Problema detectado:**
+`var ivaPct = parseFloat(row[idxIvaPct]) || null;`
+Cuando el valor es "0" (o 0), `parseFloat("0") || null` devuelve `null` porque
+`0` es falsy en JavaScript. Las facturas con IVA 0% no se contaban en el KPI.
+
+**Corrección:**
+Función `parseIvaPctDashboard(valor)` con comprobación explícita:
+`if (!txt || txt === "-") return null; ... return isNaN(n) ? null : n;`
+(nunca usa `|| null` para el resultado numérico).
+
+**Regla operativa permanente:**
+> `parseFloat(x) || null` es un patrón incorrecto cuando x puede ser cero.
+> Usar siempre comprobación explícita: `var n = parseFloat(x); return isNaN(n) ? null : n;`
+
+**Archivos afectados:** `dashboard/Code.gs`
+
+---
+
+## L-058 — 2026-06-25 | Dashboard fiscal: ordenación de fechas como string
+
+**Problema detectado:**
+`sortByCol()` comparaba fechas con `<` y `>` sobre strings "dd/mm/yyyy",
+lo que ordena lexicográficamente (incorrecto: "09/12/2025" > "01/01/2026").
+Además, Google Sheets puede devolver fechas como número serial (días desde 1899-12-30).
+
+**Corrección:**
+Función `parseFechaDashboard(valor)` que maneja:
+- Strings "dd/mm/yyyy" y "yyyy-mm-dd"
+- Serial numérico de Google Sheets
+- Objetos Date JS
+
+**Regla operativa permanente:**
+> Nunca comparar fechas del dashboard como strings.
+> Siempre convertir a timestamp con `parseFechaDashboard()` antes de ordenar.
+> Google Sheets puede enviar fechas como número serial (days since 1899-12-30).
+
+**Archivos afectados:** `dashboard/scripts.html`
+
+---
+
+## L-059 — 2026-06-25 | Dashboard fiscal: trimestres sin normalizar
+
+**Problema detectado:**
+El Sheet puede contener trimestres en distintos formatos ("Q1 2025", "Q1-2025",
+"1T 2025", "2025-Q1", etc.). El filtro y la ordenación fallaban porque se comparaba
+el string literal y se ordenaba alfabéticamente ("Q1-2025" < "Q2-2025" pero
+"Q4-2024" > "Q1-2025" alfabéticamente aunque sea anterior).
+
+**Corrección:**
+- `normalizarTrimestre(valor)` → convierte cualquier formato a "Qn-YYYY"
+- `derivarTrimestreDesdeFecha(valor)` → fallback si la columna Trimestre está vacía
+- `sortTrimestresDesc(arr)` → ordena por YYYY*10+Q descendente
+
+**Regla operativa permanente:**
+> Siempre normalizar trimestres a "Qn-YYYY" antes de filtrar u ordenar.
+> Si la columna Trimestre del Sheet está vacía, derivar desde Fecha.
+
+**Archivos afectados:** `dashboard/scripts.html`
+
+---
+
+## L-060 — 2026-06-25 | Dashboard fiscal: columna Factura nunca sustituye columnas originales
+
+**Problema detectado:**
+Al añadir la columna de enlace PDF, se intentó incluir `"RUTA_PDF"` dentro del
+`colsShow` original. Esto funcionaba si la clave existía en IDX, pero fallaba
+silenciosamente si no existía (columna desaparecida). Además, en un intento de
+corrección, se reescribió `renderTablaFacturas()` con una estructura que perdió
+algunas columnas originales.
+
+**Corrección:**
+La columna "Factura" (enlace PDF) se resuelve por separado con `getIdxFacturaPdf()`,
+se añade al final del `<thead>` y al final de cada `<tr>`, y se renderiza solo si
+`idxPdf >= 0`. Nunca altera las columnas originales.
+
+**Regla operativa permanente:**
+> La columna Factura/PDF es ADICIONAL. Nunca va dentro de colsShow.
+> Si no se encuentra la columna PDF en IDX, la tabla funciona igual sin ella.
+> El orden es siempre: [columnas originales] + [Factura si existe].
+> Columnas originales mínimas obligatorias:
+>   Fecha · Trimestre · Proveedor · N Factura · Concepto ·
+>   Base Imponible · IVA % · IVA EUR · Importe Total · Estado
+
+**Archivos afectados:** `dashboard/scripts.html`
+
+---
+
+## L-061 — 2026-06-25 | Dashboard fiscal: clasp push requiere clasp.cmd, no clasp
+
+**Problema detectado:**
+En PowerShell, ejecutar `clasp push` intenta lanzar `clasp.ps1` y PowerShell bloquea
+la ejecución de scripts .ps1 por política de seguridad. Esto da error de permisos
+aunque clasp esté instalado.
+
+**Corrección:** Usar siempre `clasp.cmd push` desde el directorio `dashboard/`.
+
+**Regla operativa permanente:**
+> En PowerShell de Windows, siempre `clasp.cmd push`, nunca `clasp push`.
+> Script ID del proyecto: `1ZV3lEbhSqze0E7dnMyntXJuAlj6S4N7E3YEzAQ_qUOj7HFd4SI_t_1oE`
+> Después de push, publicar nueva versión:
+>   Implementar → Gestionar implementaciones → lápiz → Nueva versión → Implementar
+> El dashboard publicado (URL deployment) NO se actualiza con el push hasta publicar versión.
+
+**Archivos afectados:** `C:\Users\Juan\Desktop\RESTAURAR_DASHBOARD_GAS.bat`
+
+---
+
+## L-062 — 2026-06-25 | Dashboard fiscal: git index corrompe en sandbox NTFS
+
+**Problema detectado:**
+El sandbox Linux monta el repo de Windows vía NTFS. Después de múltiples operaciones
+de escritura de archivo, `git status --short` desde bash devuelve
+`fatal: unable to read <sha>` o `fatal: index file corrupt`.
+El repo en Windows sigue estando íntegro; es un problema de caché del índice en el mount.
+
+**Regla operativa permanente:**
+> `git status --short` desde bash puede fallar en repos NTFS montados — es un falso positivo.
+> Ejecutar `git status` siempre desde Windows PowerShell para ver el estado real.
+> No intentar `rm .git/index` desde el sandbox (Operation not permitted).
+> Los cambios de archivo en disco son siempre correctos aunque el índice git del sandbox falle.
+
+**Archivos afectados:** N/A (artefacto del entorno)
+
+---
+
+## L-063 — 2026-06-25 | Dashboard fiscal: protocolo de regresiones visuales
+
+**Problema detectado:**
+En múltiples ocasiones se aplicaron parches que introdujeron regresiones visuales
+(columnas desaparecidas, sintaxis rota, KPIs incorrectos) que llegaron al dashboard
+publicado antes de detectarse.
+
+**Regla operativa permanente — Protocolo obligatorio:**
+1. PARAR al detectar cualquier regresión. No aplicar más parches encima.
+2. Leer `git show <commit>:dashboard/scripts.html` para comparar contra la versión funcional.
+3. Diagnosticar causa raíz antes de tocar código.
+4. Aplicar parche mínimo (cambiar lo menos posible).
+5. Validar en orden: `node --check` → `verificar_dashboard_solo_lectura.py` → `git diff --check`
+6. Solo tras validación, hacer `clasp.cmd push`.
+7. Publicar nueva versión en Apps Script.
+8. Confirmar visualmente en el navegador (F12 → Console para ver logs).
+9. Solo entonces commitear.
+10. Añadir la lección a este archivo.
+
+**Archivos afectados:** `dashboard/scripts.html`, `dashboard/Code.gs`
+
+---
+
+## L-064 — 2026-06-29 | Criterio fiscal DIGI: titular Elizabeth Vicci es válido para Bordagran
+
+**Problema detectado:**
+Las facturas de DIGI Spain Telecom emitidas a nombre de Elizabeth Vicci
+se marcaban como `Revisar` porque el parser no encontraba "Bordagran" como titular.
+Criterio incorrecto: el nombre del titular no determina la procedencia fiscal de un gasto de autónomo.
+
+**Regla operativa permanente (confirmada por Juan):**
+- Proveedor: DIGI Spain Telecom, S.A.U. / NIF A84919760 / dominio digimobil.es
+- Titular fiscal válido: Elizabeth Vicci (autónoma / Bordagran)
+- Estado si extracción correcta: `Registrada`
+- Estado solo si faltan datos o hay incoherencia: `Revisar`
+- No marcar `Revisar` por el nombre del titular en la factura
+- NIF/NIE personal del titular NO guardar en fixtures, logs, repo ni tests
+
+**Datos patrón factura DIGI:**
+- Número: patrón DGFC + dígitos (ej: DGFC2617783077)
+- Fecha: campo "Fecha de emisión"
+- Base: campo "IMPORTE (base imponible)"
+- IVA: campo "IMPUESTOS (21.00% IVA)"
+- Total: campo "TOTAL FACTURA (imp. incl.)"
+- Tipo: telecomunicaciones
+
+**Solución implementada:**
+- Parser `_extraer_datos_digi()` añadido en `procesar_facturas.py`
+- Activación por keywords: "digi", "dgfc", "digimobil"
+- Genera concepto: "Telecomunicaciones DIGI — periodo FECHA1 - FECHA2"
+- Genera notas: "Proveedor DIGI validado por criterio fiscal de Juan."
+- Añadido en `maestro_proveedores_seed.json` con `estado_defecto: Registrada`
+- Búsqueda Gmail: `(from:digimobil.es OR "DIGI Spain Telecom" OR "DGFC") has:attachment filename:pdf`
+
+**Archivos afectados:** `scripts/procesar_facturas.py`, `references/maestro_proveedores_seed.json`, `CLAUDE.md`, `SKILL.md`

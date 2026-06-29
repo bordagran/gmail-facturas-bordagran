@@ -19,12 +19,11 @@ var HOJA_MAESTRO  = "MAESTRO_PROVEEDORES";
  * Punto de entrada principal del Web App.
  * Solo devuelve HTML — no modifica ningún dato.
  */
-function doGet(e) {
+function doGet() {
   return HtmlService
     .createTemplateFromFile("Index")
     .evaluate()
-    .setTitle("Dashboard Fiscal Bordagran")
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.DENY);
+    .setTitle("Dashboard Fiscal Bordagran");
 }
 
 
@@ -38,9 +37,32 @@ function include(filename) {
 
 
 /**
+ * Normaliza una cabecera de columna para comparación robusta.
+ * Mayúsculas, sin tildes, sin caracteres especiales, espacios normalizados.
+ * Ejemplo: "Ruta PDF (Drive)" → "RUTA PDF DRIVE"
+ * SOLO LECTURA — función pura.
+ */
+function normHdrGs_(txt) {
+  return String(txt || "").toUpperCase()
+    .replace(/[ÁÀÄÂ]/g,"A").replace(/[ÉÈËÊ]/g,"E")
+    .replace(/[ÍÌÏÎ]/g,"I").replace(/[ÓÒÖÔ]/g,"O")
+    .replace(/[ÚÙÜÛ]/g,"U").replace(/Ñ/g,"N")
+    .replace(/[^A-Z0-9]+/g," ").trim();
+}
+
+
+/**
  * Lee todas las filas de FACTURA PROVEEDORES.
- * Devuelve { headers: [...], rows: [[...], ...] }
- * SOLO LECTURA — solo usa getValues().
+ * Devuelve { headers: [...], rows: [[...], ...], debug_urls: N }
+ *
+ * Añade columna virtual URL_FACTURA_DASHBOARD (no existe en el Sheet).
+ * Para cada fila, busca la URL del PDF en este orden:
+ *   1. Valor texto directo que empiece por http (columnas Ruta PDF)
+ *   2. Hipervínculo en rich text (getRichTextValues)
+ *   3. Fórmula HYPERLINK (getFormulas)
+ *   4. Mismo proceso en columna Nº Factura (por si el enlace está ahí)
+ *
+ * SOLO LECTURA — solo usa getValues, getRichTextValues, getFormulas.
  */
 function getFacturas() {
   try {
@@ -48,14 +70,70 @@ function getFacturas() {
     var sheet = ss.getSheetByName(HOJA_FACTURAS);
     if (!sheet) return { error: "Pestaña '" + HOJA_FACTURAS + "' no encontrada." };
 
-    var data = sheet.getDataRange().getValues();
+    var range = sheet.getDataRange();
+    var data  = range.getValues();
     if (!data || data.length < 2) return { headers: [], rows: [] };
 
+    // Leer fuentes adicionales para extraer hipervínculos (solo lectura)
+    var rich, formulas;
+    try { rich     = range.getRichTextValues(); } catch(e) { rich     = null; }
+    try { formulas = range.getFormulas();       } catch(e) { formulas = null; }
+
     var headers = data[0].map(function(h) { return String(h).trim(); });
-    var rows    = data.slice(1).map(function(row) {
-      return row.map(function(cell) {
+
+    // Localizar columna "Ruta PDF (Drive)" o cualquier variante.
+    // Usa subcadena sobre el header normalizado para máxima tolerancia:
+    //   "Ruta PDF (Drive)" → norm → "RUTA PDF DRIVE" → contiene "RUTA PDF" → encontrado
+    //   "Ruta PDF"         → norm → "RUTA PDF"        → contiene "RUTA PDF" → encontrado
+    //   "URL PDF"          → norm → "URL PDF"          → contiene "URL PDF"  → encontrado
+    var PDF_KEYWORDS = ["RUTA PDF", "URL PDF", "ENLACE PDF", "FACTURA PDF", "RUTA DRIVE"];
+    var idxRuta = -1;
+    for (var c = 0; c < headers.length; c++) {
+      var hn = normHdrGs_(headers[c]);
+      for (var k = 0; k < PDF_KEYWORDS.length; k++) {
+        if (hn.indexOf(PDF_KEYWORDS[k]) >= 0) { idxRuta = c; break; }
+      }
+      if (idxRuta >= 0) break;
+    }
+
+    // Extrae URL de una celda: texto plano → rich text link → fórmula HYPERLINK
+    function extractUrl_(ri, ci) {
+      // 1. Valor texto directo
+      var val = String(data[ri][ci] === null || data[ri][ci] === undefined ? "" : data[ri][ci]).trim();
+      if (/^https?:\/\//i.test(val)) return val;
+
+      // 2. Rich text hipervínculo (getRichTextValues)
+      if (rich && rich[ri] && rich[ri][ci]) {
+        try {
+          var rtv = rich[ri][ci];
+          var lu = rtv.getLinkUrl();
+          if (lu && /^https?:\/\//i.test(lu)) return lu;
+          var runs = rtv.getRuns ? rtv.getRuns() : [];
+          for (var r = 0; r < runs.length; r++) {
+            var ru = runs[r].getLinkUrl ? runs[r].getLinkUrl() : null;
+            if (ru && /^https?:\/\//i.test(ru)) return ru;
+          }
+        } catch(e) {}
+      }
+
+      // 3. Fórmula HYPERLINK: =HYPERLINK("https://...","texto") — sep , o ;
+      if (formulas && formulas[ri] && formulas[ri][ci]) {
+        var f = String(formulas[ri][ci]);
+        var m = f.match(/=HYPERLINK\s*\(\s*["']([^"']+)["']/i);
+        if (m && /^https?:\/\//i.test(m[1])) return m[1];
+      }
+
+      return "";
+    }
+
+    var VIRTUAL_HDR = "URL_FACTURA_DASHBOARD";
+    var urlsDetectadas = 0;
+
+    var rows = data.slice(1).map(function(row, ri) {
+      var rowIdx = ri + 1; // +1 por la fila de cabecera
+
+      var mappedRow = row.map(function(cell) {
         if (cell instanceof Date) {
-          // Formatear fecha como dd/mm/aaaa para visualización
           var d = cell;
           return (
             ("0" + d.getDate()).slice(-2) + "/" +
@@ -65,9 +143,18 @@ function getFacturas() {
         }
         return cell;
       });
+
+      var url = (idxRuta >= 0) ? extractUrl_(rowIdx, idxRuta) : "";
+      if (url) urlsDetectadas++;
+      mappedRow.push(url);
+      return mappedRow;
     });
 
-    return { headers: headers, rows: rows };
+    return {
+      headers: headers.concat([VIRTUAL_HDR]),
+      rows: rows,
+      debug_urls: urlsDetectadas
+    };
   } catch (ex) {
     return { error: String(ex) };
   }
@@ -98,6 +185,21 @@ function getMaestro() {
   } catch (ex) {
     return { error: String(ex) };
   }
+}
+
+
+/**
+ * Parseo seguro de IVA%: parseFloat("0") || null = null (falsy trap).
+ * Esta función devuelve 0 correctamente cuando el valor es "0" o "0%".
+ * SOLO LECTURA — función auxiliar pura.
+ */
+function parseIvaPctDashboard(valor) {
+  if (valor === null || valor === undefined) return null;
+  var txt = String(valor).trim();
+  if (!txt || txt === "-") return null;
+  txt = txt.replace(/%/g, "").replace(",", ".").trim();
+  var n = parseFloat(txt);
+  return isNaN(n) ? null : n;
 }
 
 
@@ -138,6 +240,40 @@ function getResumen() {
     if (key) maestroMap[key] = m;
   });
 
+  // ── Exclusión visual v3.4.0 ──────────────────────────────────
+  // Proveedores que NO deben aparecer en KPIs, alertas ni ranking.
+  // No borra filas del Sheet. Solo filtra en memoria antes de calcular.
+  // Cubre ESCUELAARTEGRANADA y cualquier entrada con estado "Excluido"
+  // en MAESTRO_PROVEEDORES, más las variantes de nombre hard-coded.
+  var _EXCLUIDOS_VISUAL = [
+    "escuelaartegranada",
+    "escuelaartegranadada",   // typo defensivo
+    "escuelaartegranada",
+    "escuelaartegranada",
+  ];
+  // Añadir entradas Excluido del Maestro dinámicamente
+  Object.keys(maestroMap).forEach(function(k) {
+    var ev = String(
+      maestroMap[k]["Estado validación proveedor"] ||
+      maestroMap[k]["Estado validacion proveedor"] || ""
+    ).trim().toLowerCase();
+    if (ev === "excluido") { _EXCLUIDOS_VISUAL.push(k); }
+  });
+  function _esExcluidoVisual(nombreProv) {
+    var norm = nombreProv.toLowerCase().replace(/\s+/g, "");
+    // Variantes con "de" y sin "de"
+    var variantes = [
+      norm,
+      norm.replace("dearte", "arte"),   // "escueladeartegranada" -> "escuelaartegranada"
+      norm.replace("escueladearte", "escuelaarte")
+    ];
+    for (var vi = 0; vi < variantes.length; vi++) {
+      if (_EXCLUIDOS_VISUAL.indexOf(variantes[vi]) >= 0) return true;
+    }
+    return false;
+  }
+  // ── Fin exclusión visual ──────────────────────────────────────
+
   // KPIs
   var totalFacturas    = 0;
   var sumaBase         = 0;
@@ -162,6 +298,10 @@ function getResumen() {
   rows.forEach(function(row, i) {
     if (!row[idxProv] && !row[idxTotal]) return; // fila vacía
 
+    // v3.4.0: excluir visualmente antes de KPIs, alertas y ranking
+    var _provCheck = String(row[idxProv] || "").trim();
+    if (_esExcluidoVisual(_provCheck)) return;
+
     totalFacturas++;
 
     var base    = parseFloat(row[idxBase])   || 0;
@@ -174,7 +314,7 @@ function getResumen() {
     var fecha   = String(row[idxFecha]  || "").trim();
     var numFact = String(row[idxNumFact]|| "").trim();
     var ruta    = String(row[idxRuta]   || "").trim();
-    var ivaPct  = parseFloat(row[idxIvaPct]) || null;
+    var ivaPct  = parseIvaPctDashboard(row[idxIvaPct]);
 
     sumaBase    += base;
     sumaIvaEur  += ivaEur;
@@ -192,16 +332,21 @@ function getResumen() {
       sinPdf++;
     }
 
-    // IVA 0% (intracomunitario)
-    if (ivaPct === 0 || ivaPct === 0.0) {
-      ivaCero++;
-    }
-
-    // Intracomunitario / RITI
+    // Maestro lookup — debe ir antes de ivaCero para incluir intracomunitarias
     var provKey = prov.toLowerCase().replace(/\s+/g, "");
     var maestroEntry = maestroMap[provKey];
-    if (maestroEntry && String(maestroEntry["Tipo fiscal"] || "").indexOf("Intracomunitario") >= 0) {
+    var esIntracomunitario = maestroEntry &&
+      String(maestroEntry["Tipo fiscal"] || "").indexOf("Intracomunitario") >= 0;
+
+    // Intracomunitario / RITI (contador separado)
+    if (esIntracomunitario) {
       intracomunitario++;
+    }
+
+    // IVA 0%: IVA% explícito = 0 O proveedor intracomunitario en Maestro
+    // Garantiza: KPI IVA 0% >= KPI Intracomunit. siempre
+    if (ivaPct === 0 || esIntracomunitario) {
+      ivaCero++;
     }
 
     // Fecha sospechosa: trimestre en columna B no cuadra con fecha

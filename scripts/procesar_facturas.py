@@ -1008,6 +1008,75 @@ def _extraer_datos_radiokable(texto: str) -> dict:
 
     return resultado
 
+
+def _extraer_datos_digi(texto: str) -> dict:
+    """
+    Parser especifico para DIGI Spain Telecom, S.A.U. (digimobil.es).
+
+    Layout tipico:
+      FACTURA Numero: DGFC2617783077
+      Fecha de emision  23/06/2026
+      Periodo de consumo  14/05/2026 - 13/06/2026
+      IMPORTE (base imponible)  23,96 EUR
+      IMPUESTOS (21.00% IVA)    5,04 EUR
+      TOTAL FACTURA (imp. incl.) 29,00 EUR
+
+    Criterio fiscal Juan (L-064): facturas emitidas a Elizabeth Vicci son
+    fiscalmente procedentes para Bordagran/autonoma. Estado: Registrada.
+    NIF/NIE personal del titular nunca se guarda en el repo.
+    """
+    resultado = {}
+
+    # Numero de factura: DGFC seguido de digitos
+    for pat in [
+        r"FACTURA\s+N[u\u00fa]mero:\s*([A-Z0-9]+)",
+        r"\b(DGFC\d{7,})\b",
+    ]:
+        m = re.search(pat, texto, re.IGNORECASE)
+        if m:
+            resultado["num_factura"] = m.group(1).strip().upper()
+            break
+
+    # Fecha de emision
+    m = re.search(r"Fecha\s+de\s+emisi[o\u00f3]n\s+(\d{2}/\d{2}/\d{4})", texto, re.IGNORECASE)
+    if m:
+        resultado["fecha"] = m.group(1)
+
+    # Periodo de consumo (para concepto)
+    m = re.search(
+        r"Periodo\s+de\s+consumo\s+(\d{2}/\d{2}/\d{4})\s*[-\u2013]\s*(\d{2}/\d{2}/\d{4})",
+        texto, re.IGNORECASE
+    )
+    if m:
+        resultado["_periodo"] = "{} - {}".format(m.group(1), m.group(2))
+
+    # Base imponible
+    m = re.search(r"IMPORTE\s*\(base\s+imponible\)\s*([\d.,]+)\s*[€E]", texto, re.IGNORECASE)
+    if m:
+        v = parse_importe(m.group(1))
+        if v and v > 0:
+            resultado["base"] = v
+
+    # IVA EUR y pct
+    m = re.search(r"IMPUESTOS\s*\(\s*([\d.,]+)%\s*IVA\s*\)\s*([\d.,]+)", texto, re.IGNORECASE)
+    if m:
+        pct = parse_importe(m.group(1))
+        eur = parse_importe(m.group(2))
+        if pct is not None:
+            resultado["iva_pct"] = int(round(pct))
+        if eur and eur > 0:
+            resultado["iva_eur"] = eur
+
+    # Total factura
+    m = re.search(r"TOTAL\s+FACTURA\s*\(imp\.\s*incl\.\)\s*([\d.,]+)", texto, re.IGNORECASE)
+    if m:
+        v = parse_importe(m.group(1))
+        if v and v > 0:
+            resultado["total"] = v
+
+    return resultado
+
+
 def extraer_datos_pdf(ruta: str) -> dict:
     datos = {
         "num_factura": "", "fecha": "", "base": None,
@@ -1200,6 +1269,29 @@ def extraer_datos_pdf(ruta: str) -> dict:
                     datos["num_factura"] = f"{_m_fn.group(1)}/{_m_fn.group(2).upper()}/{_m_fn.group(3)}"
                     log(f"  [RADIOKABLE] num_factura desde filename: {datos['num_factura']!r}")
             log(f"  [RADIOKABLE] parser especifico: num={datos.get('num_factura')!r} total={datos.get('total')} base={datos.get('base')}")
+
+        # DIGI Spain Telecom: DGFC... / digimobil.es
+        # Criterio fiscal Juan (L-064): titular Elizabeth Vicci valido para Bordagran/autonoma.
+        # Estado Registrada si extraccion completa. No guardar NIF/NIE personal en el repo.
+        if "digi" in t.lower() or "dgfc" in t.lower() or "digimobil" in t.lower():
+            _dg = _extraer_datos_digi(t)
+            if _dg.get("num_factura"):
+                datos["num_factura"] = _dg["num_factura"]
+            if _dg.get("fecha"):
+                datos["fecha"] = _dg["fecha"]
+            if _dg.get("base") is not None:
+                datos["base"] = _dg["base"]
+            if _dg.get("iva_pct") is not None:
+                datos["iva_pct"] = _dg["iva_pct"]
+            if _dg.get("iva_eur") is not None:
+                datos["iva_eur"] = _dg["iva_eur"]
+            if _dg.get("total") is not None:
+                datos["total"] = _dg["total"]
+            if _dg.get("_periodo"):
+                datos["concepto"] = "Telecomunicaciones DIGI — periodo {}".format(_dg["_periodo"])
+                datos["notas"] = "Proveedor DIGI validado por criterio fiscal de Juan."
+            log(f"  [DIGI] parser: num={datos.get('num_factura')!r} "
+                f"base={datos.get('base')} iva={datos.get('iva_pct')}% total={datos.get('total')}")
 
         # Calculos de respaldo
         if datos["total"] is None and datos["base"] is not None and datos["iva_eur"] is not None:

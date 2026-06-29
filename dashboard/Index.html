@@ -103,5 +103,49 @@
   </div><!-- /container -->
 
   <?!= include('scripts') ?>
+
+  <script>
+  // ── Exclusión visual cliente v3.4.0 ────────────────────────────────
+  // Oculta ESCUELAARTEGRANADA (y variantes) de TODA la UI del dashboard:
+  // tabla, KPIs filtrados, dropdown proveedor, ranking, trimestres y búsqueda.
+  // No toca Google Sheets, no borra filas, no modifica Gmail ni Drive.
+  // Se ejecuta DESPUÉS de scripts.html, parcheando populateFiltros()
+  // que es el punto donde IDX ya existe y STATE.facturas está cargado.
+  // ──────────────────────────────────────────────────────────────────
+
+  function esExcluidoVisualCliente(nombreProv) {
+    if (!nombreProv) return false;
+    // Normalizar: minúsculas, sin tildes, sin espacios
+    var n = nombreProv.toLowerCase()
+      .replace(/á/g,'a').replace(/é/g,'e').replace(/í/g,'i')
+      .replace(/ó/g,'o').replace(/ú/g,'u').replace(/ü/g,'u')
+      .replace(/\s+/g,'');
+    // Variante colapsando "de": "escueladeartegranada" -> "escuelaartegranada"
+    var nSinDe = n.replace('dearte','arte').replace('escueladearte','escuelaarte');
+    var excluidos = ['escuelaartegranada'];
+    for (var i = 0; i < excluidos.length; i++) {
+      if (n === excluidos[i] || nSinDe === excluidos[i]) return true;
+    }
+    return false;
+  }
+
+  // Parchear populateFiltros: se llama justo después de buildIDX,
+  // momento en que IDX ya existe. Filtramos STATE.facturas una sola vez
+  // antes de que los dropdowns se pueblen y antes de cualquier renderTodo().
+  (function () {
+    var _orig = populateFiltros;
+    populateFiltros = function () {
+      var idxProv = (IDX && IDX['PROVEEDOR'] !== undefined) ? IDX['PROVEEDOR'] : -1;
+      if (idxProv >= 0) {
+        STATE.facturas = STATE.facturas.filter(function (row) {
+          var prov = String(row[idxProv] || '').trim();
+          return !esExcluidoVisualCliente(prov);
+        });
+      }
+      _orig();
+    };
+  })();
+  // ── Fin exclusión visual cliente v3.4.0 ────────────────────────────
+  </script>
 </body>
 </html>

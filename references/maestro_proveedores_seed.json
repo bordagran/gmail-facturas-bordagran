@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "version": "v3.3.0-rev2",
+    "version": "v3.4.0",
     "fecha_creacion": "2026-06-23",
     "descripcion": "Semilla inicial del MAESTRO_PROVEEDORES para Bordagran. Criterios aprobados por Juan Maria. NO modificar sin revision.",
     "columnas": [
@@ -19,7 +19,8 @@
       "Primera deteccion",
       "Ultima deteccion",
       "Notas"
-    ]
+    ],
+    "fecha_ultima_actualizacion": "2026-06-24"
   },
   "proveedores": [
     {
@@ -276,6 +277,40 @@
       "primera_deteccion": "2026-01-01",
       "ultima_deteccion": "2026-06-23",
       "notas": "IVA 21% ES."
+    },
+    {
+      "proveedor_detectado": "ESCUELAARTEGRANADA",
+      "proveedor_normalizado": "Escuela de Arte Granada",
+      "email_dominio": "escueladeartegranada",
+      "categoria": "No proveedor fiscal",
+      "tipo_fiscal": "No fiscal",
+      "estado_defecto": "Excluido",
+      "proveedor_seguro": "No",
+      "accion_automatica": "Excluir",
+      "estado_validacion": "Excluido",
+      "validado_por": "Juan",
+      "fecha_validacion": "2026-06-24",
+      "criterio_validado": "No proveedor ni cliente. Documentos de Escuela de Arte Granada no imputables fiscalmente a Bordagran.",
+      "primera_deteccion": "2026-06-24",
+      "ultima_deteccion": "2026-06-24",
+      "notas": "Numeros tipo TEMP-... no son facturas fiscales. Excluir de historico, dashboard y candidatos. v3.4.0."
+    },
+    {
+      "proveedor_detectado": "DIGI Spain Telecom, S.A.U.",
+      "proveedor_normalizado": "DIGI Spain Telecom, S.A.U.",
+      "email_dominio": "digimobil.es",
+      "categoria": "Telecomunicaciones",
+      "tipo_fiscal": "Nacional con IVA",
+      "estado_defecto": "Registrada",
+      "proveedor_seguro": "Si",
+      "accion_automatica": "Registrar automaticamente si extraccion completa",
+      "estado_validacion": "Validado",
+      "validado_por": "Juan",
+      "fecha_validacion": "2026-06-29",
+      "criterio_validado": "Proveedor fiscal valido. Facturas emitidas a nombre de Elizabeth Vicci son fiscalmente procedentes para Bordagran/autonoma. No marcar Revisar por titular. L-064.",
+      "primera_deteccion": "2026-06-29",
+      "ultima_deteccion": "2026-06-29",
+      "notas": "NIF proveedor A84919760. Alias: DIGI, Digi Mobil, DIGI Spain Telecom, digimobil. Num factura patron DGFC seguido de digitos. IVA 21%. Titular Elizabeth Vicci aceptado fiscalmente. NIF/NIE personal del titular NO guardar en repo. v3.4.1."
     }
   ]
 }
