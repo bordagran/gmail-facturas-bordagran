@@ -1083,3 +1083,97 @@ la fecha almacenada en el Sheet es noviembre -> Q4.
 **Archivos modificados:**
 - `scripts/procesar_facturas.py` (parsear_fecha_espanola, bilingue regex, fallback GOR, escribir_fila)
 - `scripts/corregir_fecha_gor.py` (nuevo -- correccion de la fila existente)
+
+## L-066 -- 2026-07-01 | Auditoría cobertura Gmail Q2: 4 gaps identificados y corregidos
+
+**Problema detectado:**
+9 PDFs en `C:\Users\Juan\Downloads\2Q 2026` (copias manuales) no estaban registrados en el Sheet.
+La auditoría `auditar_cobertura_gmail.py` reveló 4 categorías de gap de cobertura.
+
+**Gaps identificados:**
+
+**GAP 1 -- num_factura con palabras genéricas (bug auditor):**
+El extractor de `num_factura` del auditor aceptaba "Fecha", "Número", "Factura", "Elizabet"
+porque los patrones regex capturaban la siguiente palabra tras "FACTURA:" o "N. Factura:"
+aunque esa palabra fuera un label genérico del PDF.
+Consecuencia: la comparación con `registrados` del Sheet fallaba silenciosamente.
+Fix: blacklist `{'fecha', 'numero', 'factura', ...}` + fallback extracción desde nombre del archivo.
+
+**GAP 2 -- Verificación msgs_q2 con num_f_raw (bug auditor):**
+El auditor verificaba si el email estaba en la query del sistema añadiendo `num_f_raw` al query.
+Pero el número de factura está en el PDF (adjunto), no en el cuerpo del email.
+Resultado: Octopus Energy aparecía como QUERY_NO_CAPTURA siendo en realidad PROVEEDOR_PENDIENTE.
+Fix: usar `proveedor_hint` en lugar de `num_f_raw` para el query de verificación.
+
+**GAP 3 -- Proveedores que envían factura por enlace (SOLS, THClothes, DIGI):**
+SOLS, THClothes y DIGI no adjuntan el PDF al email -- envían un aviso con enlace de descarga.
+El sistema los encontraba pero los clasificaba como `sin_pdf` sin dejar rastro persistente.
+Las facturas desaparecían silenciosamente (solo un warning en log de ejecución).
+Fix: `PROVEEDORES_ENLACE_FACTURA` + `_generar_pendiente_enlace()` que escribe en
+`runtime/pendientes_descarga_manual.json`. El email se etiqueta como pendiente en Gmail.
+
+**GAP 4 -- Octopus Energy: PDF inline, no adjunto estándar:**
+Octopus Energy puede enviar la factura como PDF embebido inline en el email (no como adjunto).
+Gmail `has:attachment filename:pdf` no lo encuentra; el sistema lo pierde.
+Fix: query complementaria `from:(hola@octopusenergy.es OR octopusenergy.es) {rango}`.
+
+**VIVADTF y Velilla -- no eran bugs, eran facturas pendientes:**
+Las facturas VIVADTF `factura-26648.pdf` y Velilla `FV1002260608540.pdf` SÍ estaban en la
+query del sistema pero no se habían procesado porque la tarea programada estaba DESHABILITADA
+(pendiente confirmación v3.4.6). Son genuinamente nuevas -- se procesarán con el próximo dry-run.
+
+**Reglas permanentes:**
+- `num_factura` extraído del PDF NUNCA aceptar palabras genéricas: usar blacklist.
+- Fallback: extraer `num_factura` desde el nombre del archivo si no se obtiene del texto.
+- Emails de factura sin PDF adjunto: NO silenciar -- escribir en `runtime/pendientes_descarga_manual.json`.
+- La verificación de cobertura en el auditor NO debe añadir `num_factura` al query del sistema
+  porque el número de factura está en el PDF, no en el email.
+- Octopus Energy: siempre usar query por remitente (no solo `has:attachment filename:pdf`).
+
+**Archivos modificados (v3.4.7):**
+- `scripts/auditar_cobertura_gmail.py` (blacklist num_factura, fallback filename, fix msgs_q2)
+- `scripts/procesar_facturas.py` (PROVEEDORES_ENLACE_FACTURA, _generar_pendiente_enlace, query Octopus)
+
+---
+
+## L-067 -- Mercadona: gasto personal, no proveedor fiscal de Bordagran (2026-07-01)
+
+**Contexto:** PDF `20260624_Mercadona_66_64__.pdf` aparecia en la auditoria de cobertura
+como `proveedor_no_identificado`. Mercadona / ticket_digital@mail.mercadona.com envia
+tickets de compra de supermercado por email: son gastos personales de Juan, no imputables
+a Bordagran como autonoma.
+
+**Riesgo:** Si se clasificara como proveedor, sus tickets de compra podrian insertarse en
+el Sheet de facturas de Bordagran, contaminando el registro fiscal.
+
+**Fix:** Anadido a `references/exclusiones.json` con:
+- email: `ticket_digital@mail.mercadona.com`
+- palabras_clave: `mercadona`, `mail.mercadona.com`, `mercadona.com`, `ticket_digital`
+- motivo: "Gasto personal del usuario - no proveedor fiscal de Bordagran"
+- accion: `no_insertar_facturas`
+
+**Regla permanente:** Nunca tratar Mercadona como proveedor fiscal de Bordagran.
+El dominio `mercadona.com` y el remitente `ticket_digital@mail.mercadona.com` deben
+quedar siempre en exclusiones. v3.4.7.
+
+---
+
+## L-068 -- IMSERSO: tramite personal, no proveedor fiscal de Bordagran (2026-07-01)
+
+**Contexto:** Dry-run Q2 final mostro IMSERSO como pendiente con
+`Resguardo_justificante_solicitud.pdf` (num invalido: `icartsinimda`). IMSERSO envia
+resguardos de justificante de solicitud al usuario: son tramites personales, no
+imputables como gasto fiscal de Bordagran.
+
+**Riesgo:** Sin exclusion, el sistema intentaria procesar el PDF como factura fiscal,
+generando un pendiente erroneo o incluso una fila incorrecta en el Sheet.
+
+**Fix:** Anadido a `references/exclusiones.json` con:
+- email: `noresponder@imserso.gob.es`
+- palabras_clave: `imserso`, `imserso.gob.es`, `resguardo_justificante_solicitud`, `noresponder@imserso.gob.es`
+- motivo: "Documento personal del usuario / tramite personal / no proveedor fiscal de Bordagran"
+- accion: `no_insertar_facturas`
+
+**Regla permanente:** Nunca tratar IMSERSO como proveedor fiscal de Bordagran.
+Cualquier email de `imserso.gob.es` o PDF con `resguardo_justificante` debe quedar
+excluido. v3.4.7.

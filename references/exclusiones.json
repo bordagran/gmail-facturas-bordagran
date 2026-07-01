@@ -41,14 +41,39 @@
     "notas": "Documentos de Escuela de Arte Granada (nums TEMP-...) no imputables fiscalmente a Bordagran. Excluir de historico, dashboard y candidatos. v3.4.0."
   },
   {
-    "email": "",
+    "email": "spereira@guijarroconsultores.com",
     "palabras_clave": [
       "guijarro",
       "guijarroconsultores",
-      "guijarro consultores"
+      "guijarro consultores",
+      "guijarroconsultores.com"
     ],
     "motivo": "Documentacion personal del usuario  - no proveedor fiscal de Bordagran",
     "accion": "no_insertar_facturas",
-    "notas": "Guijarro Consultores emite documentacion personal del usuario de Bordagran (recibos, informes, docs personales). No imputable como gasto fiscal de Bordagran. No debe aparecer como candidato fiscal ni en ranking de proveedores. v3.4.2."
+    "notas": "Guijarro Consultores emite documentacion personal del usuario de Bordagran (recibos, informes, docs personales). No imputable como gasto fiscal de Bordagran. No debe aparecer como candidato fiscal ni en ranking de proveedores. v3.4.2. Email especifico: spereira@guijarroconsultores.com / dominio guijarroconsultores.com. v3.4.6."
+  },
+  {
+    "email": "ticket_digital@mail.mercadona.com",
+    "palabras_clave": [
+      "mercadona",
+      "mail.mercadona.com",
+      "mercadona.com",
+      "ticket_digital"
+    ],
+    "motivo": "Gasto personal del usuario - no proveedor fiscal de Bordagran",
+    "accion": "no_insertar_facturas",
+    "notas": "Mercadona tickets de compra son gastos personales, no imputables a Bordagran como autonoma. Remitente: ticket_digital@mail.mercadona.com. v3.4.7 L-067."
+  },
+  {
+    "email": "noresponder@imserso.gob.es",
+    "palabras_clave": [
+      "imserso",
+      "imserso.gob.es",
+      "resguardo_justificante_solicitud",
+      "noresponder@imserso.gob.es"
+    ],
+    "motivo": "Documento personal del usuario / tramite personal / no proveedor fiscal de Bordagran",
+    "accion": "no_insertar_facturas",
+    "notas": "IMSERSO envia resguardos de justificante de solicitud (tramites personales del usuario). No imputable como gasto fiscal de Bordagran. Remitente: noresponder@imserso.gob.es / dominio imserso.gob.es. v3.4.7 L-068."
   }
 ]

@@ -516,6 +516,10 @@ TIPOS_FISCALES = {"factura", "factura_simplificada", "factura_en_cuerpo", "factu
 # Proveedores cuyo PDF es ilegible (requieren OCR): insertar como Revisar en vez de Pendiente
 PROVEEDORES_PDF_ILEGIBLE = {"nibaenergia", "niba energia", "niba"}  # v3.2.0 L-046
 
+# Proveedores que envian factura por enlace (sin PDF adjunto directo).
+# No insertar en Sheet. Anotar en runtime/pendientes_descarga_manual.json. (L-066)
+PROVEEDORES_ENLACE_FACTURA = {"sols", "thclothes", "digi", "digimobil", "digi spain"}
+
 # Proveedores que pueden insertar con referencia tecnica autogenerada (sin num fiscal real)
 PROVEEDORES_REF_TECNICA = {
     "canva", "anthropic",
@@ -1834,6 +1838,37 @@ def extraer_texto_email(gmail, msg_id: str) -> str:
         return ""
 
 
+def _generar_pendiente_enlace(prov_nombre: str, msg_id: str, meta: dict) -> None:
+    """Registra en runtime/pendientes_descarga_manual.json el email de factura
+    sin PDF adjunto (enlace) para que Juan pueda descargarla manualmente.
+    Idempotente: no genera duplicados por msg_id. (L-066)
+    """
+    p = Path(__file__).resolve().parent.parent / "runtime" / "pendientes_descarga_manual.json"
+    try:
+        if p.exists():
+            with open(str(p), encoding="utf-8") as fh:
+                lista = json.load(fh)
+        else:
+            lista = []
+        for item in lista:
+            if item.get("msg_id") == msg_id:
+                return  # ya anotado, idempotente
+        lista.append({
+            "proveedor": prov_nombre,
+            "msg_id": msg_id,
+            "asunto": meta.get("asunto", ""),
+            "fecha_email": meta.get("fecha_raw", ""),
+            "motivo": "EMAIL_FACTURA_SIN_PDF_ADJUNTO_ENLACE_MANUAL",
+            "detectado": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "estado": "PENDIENTE",
+        })
+        with open(str(p), "w", encoding="utf-8") as fh:
+            json.dump(lista, fh, ensure_ascii=False, indent=2)
+        log(f"  [ENLACE-MANUAL] Anotado en pendientes_descarga_manual.json: {prov_nombre}")
+    except Exception as _e:
+        log(f"  [WARN] pendientes_descarga_manual.json no actualizado: {_e}", "WARN")
+
+
 def tiene_datos_fiscales(texto: str) -> bool:
     """Heuristica multilingue: importe + referencia fiscal (ES/PT/EN + REM26/CL)."""
     if not texto: return False
@@ -2128,6 +2163,9 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
         f"from:(canva.com OR no-reply@canva.com OR team@canva.com) {rango} (invoice OR receipt OR factura OR paid)",
         f"from:(thclothes.com OR marta.nazario@thclothes.com) {rango} (fatura OR invoice OR FES OR FT)",
         f"from:(clientes@sols.es OR no-reply@sols.es OR sols.es) {rango} (factura OR albaran OR REM26 OR aviso)",
+        # L-066: Octopus puede enviar facturas como PDF inline (no adjunto standard)
+        # => no siempre lo captura has:attachment filename:pdf
+        f"from:(hola@octopusenergy.es OR octopusenergy.es) {rango}",
     ]
     # Unificar resultados por msg_id para no procesar dos veces el mismo correo
     seen_ids: set = set()
@@ -2197,6 +2235,16 @@ def _ejecutar(args, skill_dir: Path, dry_run: bool = False):
                             "proveedor": prov["nombre"],
                             "motivo": "Niba sin PDF adjunto — enlace de descarga que exige autenticacion — revisar manualmente (v3.2.1 L-052)",
                         })
+                        if not dry_run:
+                            etiquetar_mensaje(gmail, msg_id, label_pendiente_id)
+                        continue
+                    # L-066: proveedores de enlace conocidos -- anotar pendiente y seguir
+                    _pnl_enlace = (prov["nombre"].lower()
+                                   .replace(" ", "").replace("-", "").replace("_", ""))
+                    if any(kw in _pnl_enlace for kw in PROVEEDORES_ENLACE_FACTURA):
+                        _generar_pendiente_enlace(prov["nombre"], msg_id, meta)
+                        r["sin_pdf"].append(remitente)
+                        log(f"  [ENLACE-FACTURA] {prov['nombre']}: factura por enlace -- anotado en pendientes_descarga_manual.json")
                         if not dry_run:
                             etiquetar_mensaje(gmail, msg_id, label_pendiente_id)
                         continue
